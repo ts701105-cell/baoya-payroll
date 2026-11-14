@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>寶雅派駐人員 薪資・差勤查詢</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f6f2ea; --card:#fffdf8; --ink:#1d2433; --muted:#6b6f7a; --line:#e3dccd;
+    --accent:#0f5c58; --accent-soft:#e2efed; --warn:#9a4a12; --warn-soft:#fbeee2; --bad:#a3262a; --bad-soft:#f8e4e4;
+    --earn:#0f5c58; --deduct:#a3262a; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans TC",system-ui,-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;font-size:15px;line-height:1.55}
+  button,input,select{font:inherit;color:inherit}
+  .serif{font-family:"Noto Serif TC",serif}
+  .wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+  .hidden{display:none!important}
+  .muted{color:var(--muted)} .small{font-size:13px}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* top bar */
+  .bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:12px;margin-bottom:20px}
+  .brand{font-family:"Noto Serif TC",serif;font-weight:700;font-size:20px;letter-spacing:.04em}
+  .brand small{display:block;font-family:"Noto Sans TC",sans-serif;font-weight:400;font-size:12px;color:var(--muted);letter-spacing:0}
+  .bar .sp{flex:1}
+  .who{font-size:14px;text-align:right}
+  .who b{font-size:15px}
+
+  .btn{border:1.5px solid var(--ink);background:var(--card);padding:7px 14px;border-radius:999px;cursor:pointer;font-weight:500;white-space:nowrap}
+  .btn:hover{background:var(--ink);color:#fff}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{filter:brightness(.92)}
+  .btn.ghost{border-color:transparent;background:transparent;text-decoration:underline;padding:7px 6px}
+  .btn.ghost:hover{color:var(--accent);background:transparent}
+  .btn.danger{border-color:var(--bad);color:var(--bad)} .btn.danger:hover{background:var(--bad);color:#fff}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn.sm{padding:4px 10px;font-size:13px}
+
+  /* login */
+  .login{max-width:400px;margin:8vh auto 0;background:var(--card);border:1.5px solid var(--ink);border-radius:var(--radius);padding:30px 28px;box-shadow:6px 6px 0 var(--ink)}
+  .login h1{font-family:"Noto Serif TC",serif;font-size:22px;margin:0 0 4px}
+  .field{display:block;margin:16px 0}
+  .field span{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
+  .field input,.field select{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff}
+  .field input:focus{outline:none;border-color:var(--accent)}
+  .msg{padding:10px 12px;border-radius:10px;font-size:14px;margin:12px 0}
+  .msg.err{background:var(--bad-soft);color:var(--bad)} .msg.ok{background:var(--accent-soft);color:var(--accent)} .msg.warn{background:var(--warn-soft);color:var(--warn)}
+
+  /* tabs & chips */
+  .tabs{display:flex;gap:4px;border-bottom:1.5px solid var(--line);margin:4px 0 18px;overflow-x:auto}
+  .tab{padding:9px 16px;border:none;background:none;cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-1.5px;font-weight:500;color:var(--muted);white-space:nowrap}
+  .tab.on{color:var(--ink);border-bottom-color:var(--accent)}
+  .periods{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+  .chip{border:1.5px solid var(--line);background:var(--card);padding:6px 14px;border-radius:999px;cursor:pointer;font-size:14px}
+  .chip.on{border-color:var(--ink);background:var(--ink);color:#fff}
+  .chip .tag{font-size:11px;opacity:.75;margin-left:4px}
+
+  /* payslip */
+  .slip{background:var(--card);border:1.5px solid var(--ink);border-radius:4px;padding:26px 28px;position:relative}
+  .slip:before{content:"";position:absolute;inset:5px;border:1px solid var(--line);pointer-events:none}
+  .slip-head{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1.5px dashed var(--line);padding-bottom:14px;margin-bottom:16px}
+  .slip-title{font-family:"Noto Serif TC",serif;font-size:22px;font-weight:700;letter-spacing:.08em}
+  .slip-meta{font-size:13px;color:var(--muted);text-align:right}
+  .slip-meta b{color:var(--ink);font-size:15px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .col h3{margin:0 0 6px;font-size:13px;letter-spacing:.12em;color:var(--muted);font-weight:500}
+  .line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dotted var(--line)}
+  .line .v{font-variant-numeric:tabular-nums;font-weight:500}
+  .earn .v{color:var(--earn)} .deduct .v{color:var(--deduct)}
+  .line.sub{padding:2px 0 2px 14px;border:none;font-size:13px;color:var(--muted)}
+  .line.sub .v{color:var(--muted);font-weight:400}
+  .line.total{border-bottom:none;border-top:1.5px solid var(--ink);margin-top:6px;font-weight:700}
+  .net{margin-top:20px;display:flex;justify-content:space-between;align-items:baseline;background:var(--ink);color:#fff;padding:14px 18px;border-radius:4px}
+  .net .lbl{font-size:14px;letter-spacing:.1em}
+  .net .amt{font-family:"Noto Serif TC",serif;font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+  .info{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
+  .pill{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:13px}
+  .pill b{font-variant-numeric:tabular-nums}
+
+  /* stats / tables */
+  .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:18px}
+  .stat{background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px}
+  .stat .k{font-size:12px;color:var(--muted)} .stat .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+  .stat .v small{font-size:13px;font-weight:400;color:var(--muted);margin-left:2px}
+  .stat.hl{border-color:var(--accent);background:var(--accent-soft)}
+  .tbl-wrap{overflow-x:auto;background:var(--card);border:1.5px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{font-size:12px;color:var(--muted);font-weight:500;background:#faf7f0;position:sticky;top:0}
+  td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+  tr.we td{background:#fbf6ec}
+  tr.leave td{background:var(--warn-soft)}
+  tr.click{cursor:pointer} tr.click:hover td{background:var(--accent-soft)}
+  .badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;background:var(--paper);border:1px solid var(--line)}
+  .badge.green{background:var(--accent-soft);border-color:#b8d6d2;color:var(--accent)}
+  .badge.orange{background:var(--warn-soft);border-color:#efc9a4;color:var(--warn)}
+  .badge.red{background:var(--bad-soft);border-color:#e9b9ba;color:var(--bad)}
+
+  /* admin */
+  .drop{display:block;border:2px dashed var(--ink);border-radius:var(--radius);padding:36px 20px;text-align:center;background:var(--card);cursor:pointer}
+  .drop.over{background:var(--accent-soft)}
+  .drop b{font-size:17px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .card{background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin:14px 0}
+  .card h2{font-size:16px;margin:0 0 10px}
+  .warns{max-height:180px;overflow:auto;margin:0;padding-left:20px;font-size:13px;color:var(--warn)}
+  .search{padding:8px 12px;border:1.5px solid var(--line);border-radius:999px;min-width:220px;background:#fff}
+  .modal-bg{position:fixed;inset:0;background:rgba(29,36,51,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .modal{background:var(--card);border-radius:var(--radius);max-width:760px;width:100%;max-height:90vh;overflow:auto;padding:20px;border:1.5px solid var(--ink)}
+  .loading{position:fixed;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--accent),transparent);background-size:50% 100%;animation:ld 1s linear infinite;z-index:60}
+  @keyframes ld{from{background-position:-50% 0}to{background-position:150% 0}}
+  .empty{padding:40px 10px;text-align:center;color:var(--muted)}
+  .foot{margin-top:40px;font-size:12px;color:var(--muted);text-align:center}
+
+  @media (max-width:640px){
+    .cols{grid-template-columns:1fr}
+    .slip{padding:20px 16px}
+    .net .amt{font-size:24px}
+    .who{text-align:left}
+    .slip-meta{text-align:left}
+  }
+  @media print{
+    body{background:#fff}
+    .bar .btn,.tabs,.periods,.noprint,.foot{display:none!important}
+    .slip{box-shadow:none}
+    .wrap{padding:0}
+  }
+</style>
+</head>
+<body>
+<div id="loading" class="loading hidden"></div>
+<div class="wrap" id="app"></div>
+<div id="modal-root"></div>
+
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="parser.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
