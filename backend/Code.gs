@@ -14,7 +14,24 @@ var APP = {
   TOKEN_HOURS: 6,
   MAX_FAIL: 5,          // 連續輸錯幾次後鎖定
   LOCK_MINUTES: 15,
-  FIXED_PASSWORD: true  // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
+  FIXED_PASSWORD: true, // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
+  LEAVE_DAY_HOURS: 8,   // 請假額度換算：1 天 = 幾小時（寶雅特休計算表以 8 小時計）
+  LEAVE_CATEGORY: '長期月薪' // 只有這個類別的員工可以使用請假功能
+};
+
+/* 請假額度：特休依到職日（週年制），其他假別依曆年（1/1–12/31） */
+var LEAVE_TYPES = {
+  '特休': { year: 'anniversary' },
+  '事假': { year: 'calendar', days: 14 },
+  '病假': { year: 'calendar', days: 30 },
+  '生理假': { year: 'calendar', days: 12, monthDays: 1 },
+  '婚假': { year: 'calendar' },
+  '喪假': { year: 'calendar' },
+  '公假': { year: 'calendar' },
+  '公傷病假': { year: 'calendar' },
+  '產檢假': { year: 'calendar' },
+  '陪產檢及陪產假': { year: 'calendar' },
+  '家庭照顧假': { year: 'calendar', days: 7, countsAs: '事假' }
 };
 
 var SHEETS = {
@@ -25,7 +42,9 @@ var SHEETS = {
   出勤明細: ['期間代碼', '東慧員編', '日期', '班別', '上班', '下班', '工時', '加班', '請假', '請假時數', '夜班津貼', '搬重時數', '特殊津貼'],
   特休: ['期間代碼', '東慧員編', '到職日', '年資', '累計已休', '剩餘特休'],
   管理員: ['帳號', '姓名', '密碼雜湊', '鹽', '需改密碼', '狀態'],
-  紀錄: ['時間', '帳號', '動作', '說明']
+  紀錄: ['時間', '帳號', '動作', '說明'],
+  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註'],
+  請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
 
@@ -156,6 +175,53 @@ var ACTIONS = {
     var key = String(r.key), src = String(r.source);
     if (!publishedSet_()[key + '|' + src]) throw new Error('這個月份尚未開放查詢');
     return { ok: true, data: periodData_(key, src, s.id) };
+  },
+
+  /* 請假（長期月薪） */
+  myLeave: function (r) {
+    var s = auth_(r.token, 'emp');
+    var emp = leaveEmp_(s.id);
+    return { ok: true, data: leaveInfo_(emp) };
+  },
+
+  applyLeave: function (r) {
+    var s = auth_(r.token, 'emp');
+    var emp = leaveEmp_(s.id);
+    var type = String(r.type || ''), start = normDate_(r.start), end = normDate_(r.end || r.start);
+    var perDay = Number(r.hoursPerDay), reason = String(r.reason || '').trim();
+    if (!LEAVE_TYPES[type]) throw new Error('請選擇假別');
+    if (!start || !end) throw new Error('請填請假日期');
+    if (end < start) throw new Error('結束日不能早於開始日');
+    if (!(perDay > 0 && perDay <= 10) || Math.round(perDay * 2) !== perDay * 2) throw new Error('每日時數請填 0.5～10 小時（以半小時為單位）');
+    var days = dateRange_(start, end);
+    if (days.length > 31) throw new Error('一次最多申請 31 天');
+    var lock = LockService.getScriptLock(); lock.waitLock(30000);
+    try {
+      var info = leaveInfo_(emp);
+      var mine = info.applications.filter(function (a) { return a.status !== '已駁回' && a.status !== '已取消'; });
+      days.forEach(function (d) {
+        mine.forEach(function (a) { if (d >= a.start && d <= a.end) throw new Error(d + ' 已經有請假申請（' + a.type + '）'); });
+      });
+      var total = perDay * days.length;
+      checkQuota_(info, type, days, perDay);
+      var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
+      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '']);
+    } finally { lock.releaseLock(); }
+    log_(emp.empNo, '申請請假', type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + total + 'h');
+    return { ok: true, data: leaveInfo_(emp) };
+  },
+
+  cancelLeave: function (r) {
+    var s = auth_(r.token, 'emp');
+    var sh = sheet_('請假'), data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]) !== String(r.id) || String(data[i][1]) !== s.id) continue;
+      if (data[i][9] !== '審核中') throw new Error('只有「審核中」的申請可以取消，已核准的請洽人事');
+      sh.getRange(i + 1, 10).setValue('已取消');
+      log_(s.id, '取消請假', r.id);
+      return { ok: true, data: leaveInfo_(leaveEmp_(s.id)) };
+    }
+    throw new Error('找不到這筆申請');
   },
 
   /* 管理員 */
@@ -323,6 +389,34 @@ var ACTIONS = {
     return { ok: true };
   },
 
+  adminLeaves: function (r) {
+    auth_(r.token, 'admin');
+    var data = sheet_('請假').getDataRange().getValues(), out = [];
+    for (var i = 1; i < data.length; i++) out.push(leaveRow_(data[i]));
+    out.sort(function (a, b) { return (a.status === '審核中') !== (b.status === '審核中') ? (a.status === '審核中' ? -1 : 1) : (a.appliedAt < b.appliedAt ? 1 : -1); });
+    return { ok: true, leaves: out };
+  },
+
+  adminLeaveInfo: function (r) {
+    auth_(r.token, 'admin');
+    return { ok: true, data: leaveInfo_(leaveEmp_(String(r.empNo), true)) };
+  },
+
+  reviewLeave: function (r) {
+    var s = auth_(r.token, 'admin');
+    var sh = sheet_('請假'), data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]) !== String(r.id)) continue;
+      if (data[i][9] !== '審核中' && !(r.approve === false && data[i][9] === '已核准')) throw new Error('這筆申請已經是「' + data[i][9] + '」');
+      var st = r.approve ? '已核准' : '已駁回';
+      sh.getRange(i + 1, 10).setValue(st);
+      sh.getRange(i + 1, 12, 1, 3).setValues([[s.id, now_(), String(r.note || '')]]);
+      log_(s.id, r.approve ? '核准請假' : '駁回請假', data[i][2] + ' ' + data[i][3] + ' ' + data[i][4]);
+      return { ok: true };
+    }
+    throw new Error('找不到這筆申請');
+  },
+
   logs: function (r) {
     auth_(r.token, 'admin');
     var sh = db_().getSheetByName('紀錄');
@@ -443,4 +537,134 @@ function findEmp_(empNo) {
   var sh = db_().getSheetByName('員工'), data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) if (String(data[i][0]) === String(empNo)) return { sh: sh, i: i, row: data[i] };
   throw new Error('找不到員工 ' + empNo);
+}
+
+
+/* ───────────── 請假 ───────────── */
+function sheet_(name) {
+  var ss = db_(), sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, 1, SHEETS[name].length).setValues([SHEETS[name]]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:Z').setNumberFormat('@');
+  }
+  return sh;
+}
+function normDate_(v) {
+  if (!v) return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, 'Asia/Taipei', 'yyyy/MM/dd');
+  var m = String(v).trim().match(/^(\d{3,4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
+  if (!m) return '';
+  var y = +m[1]; if (y < 1911) y += 1911;
+  return y + '/' + ('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2);
+}
+function toDate_(s) { var p = s.split('/'); return new Date(+p[0], +p[1] - 1, +p[2]); }
+function fmt_(d) { return Utilities.formatDate(d, 'Asia/Taipei', 'yyyy/MM/dd'); }
+function addYM_(s, y, m) { var d = toDate_(s); var t = new Date(d.getFullYear() + y, d.getMonth() + m, d.getDate()); if (t.getDate() !== d.getDate()) t = new Date(t.getFullYear(), t.getMonth(), 0); return fmt_(t); }
+function dateRange_(a, b) { var out = [], d = toDate_(a), e = toDate_(b); while (d <= e) { out.push(fmt_(d)); d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1); } return out; }
+function prevDay_(s) { var d = toDate_(s); return fmt_(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1)); }
+
+/* 勞基法第 38 條：依年資給特休天數 */
+function annualDays_(n) {          // n = 第幾個週年期間（0 = 滿半年未滿一年）
+  if (n === 0) return 3;
+  if (n === 1) return 7;
+  if (n === 2) return 10;
+  if (n <= 4) return 14;
+  if (n <= 9) return 15;
+  return Math.min(30, 15 + (n - 9));
+}
+/* 目前所在的特休週年期間 */
+function annualWindow_(hire, today) {
+  var half = addYM_(hire, 0, 6), one = addYM_(hire, 1, 0);
+  if (today < half) return { start: hire, end: prevDay_(half), days: 0, label: '到職未滿半年' };
+  if (today < one) return { start: half, end: prevDay_(one), days: 3, label: '滿半年' };
+  var n = 1;
+  while (addYM_(hire, n + 1, 0) <= today) n++;
+  return { start: addYM_(hire, n, 0), end: prevDay_(addYM_(hire, n + 1, 0)), days: annualDays_(n), label: '滿 ' + n + ' 年' };
+}
+
+function leaveEmp_(empNo, adminView) {
+  var row = findEmp_(empNo).row;
+  if (!adminView && String(row[3]) !== APP.LEAVE_CATEGORY) throw new Error('請假功能目前只開放給長期月薪人員');
+  var hire = '';
+  var an = db_().getSheetByName('特休').getDataRange().getValues();
+  for (var i = an.length - 1; i >= 1; i--) if (String(an[i][1]) === String(row[0]) && an[i][2]) { hire = normDate_(an[i][2]); break; }
+  return { empNo: String(row[0]), name: row[2], category: row[3], hire: hire };
+}
+function leaveRow_(x) {
+  return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
+    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13] };
+}
+
+/* 彙整：已休 = 已上傳出勤紀錄裡的請假 ＋ 已核准、尚未出現在出勤紀錄的申請 ＋ 「請假調整」分頁的期初時數 */
+function leaveInfo_(emp) {
+  var today = fmt_(new Date()), year = today.slice(0, 4);
+  var used = {};   // key 'date|type' -> hours（出勤紀錄優先）
+  var dl = db_().getSheetByName('出勤明細').getDataRange().getValues();
+  for (var i = 1; i < dl.length; i++) {
+    if (String(dl[i][1]) !== emp.empNo || !dl[i][8] || !(+dl[i][9] > 0)) continue;
+    used[normDate_(dl[i][2]) + '|' + String(dl[i][8]).trim()] = { hours: +dl[i][9], src: '出勤' };
+  }
+  var apps = [], la = sheet_('請假').getDataRange().getValues();
+  for (i = 1; i < la.length; i++) {
+    if (String(la[i][1]) !== emp.empNo) continue;
+    var a = leaveRow_(la[i]); apps.push(a);
+    if (a.status !== '已核准' && a.status !== '審核中') continue;
+    dateRange_(a.start, a.end).forEach(function (d) {
+      var k = d + '|' + a.type;
+      if (!used[k]) used[k] = { hours: a.perDay, src: a.status === '已核准' ? '核准' : '審核中' };
+    });
+  }
+  apps.sort(function (x, y) { return x.start < y.start ? 1 : -1; });
+  var adj = sheet_('請假調整').getDataRange().getValues().slice(1).filter(function (x) { return String(x[0]) === emp.empNo; });
+
+  function sum(type, from, to) {
+    var t = { used: 0, pending: 0 };
+    Object.keys(used).forEach(function (k) {
+      var p = k.split('|'), d = p[0], ty = p[1];
+      var cnt = ty === type || (LEAVE_TYPES[ty] && LEAVE_TYPES[ty].countsAs === type);
+      if (!cnt || d < from || d > to) return;
+      if (used[k].src === '審核中') t.pending += used[k].hours; else t.used += used[k].hours;
+    });
+    adj.forEach(function (x) { var d = normDate_(x[2]); if (String(x[1]) === type && d >= from && d <= to) t.used += +x[3] || 0; });
+    return t;
+  }
+  var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES) };
+  if (emp.hire) {
+    var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end);
+    out.balances.push({ type: '特休', rule: '週年制（到職日 ' + emp.hire + '，' + w.label + '）', from: w.start, to: w.end, quota: w.days * H, used: t.used, pending: t.pending });
+  } else {
+    out.balances.push({ type: '特休', rule: '尚無到職日資料（上傳含「特休」分頁的長期附表後自動帶入）', from: '', to: '', quota: null, used: 0, pending: 0 });
+  }
+  Object.keys(LEAVE_TYPES).forEach(function (ty) {
+    var c = LEAVE_TYPES[ty];
+    if (ty === '特休' || c.countsAs) return;
+    var t = sum(ty, year + '/01/01', year + '/12/31');
+    if (c.days || t.used || t.pending) out.balances.push({ type: ty, rule: '曆年制（' + year + '/01/01～' + year + '/12/31）', from: year + '/01/01', to: year + '/12/31', quota: c.days ? c.days * H : null, used: t.used, pending: t.pending });
+  });
+  return out;
+}
+function checkQuota_(info, type, days, perDay) {
+  var c = LEAVE_TYPES[type], base = c.countsAs || type, H = info.dayHours;
+  var b = info.balances.filter(function (x) { return x.type === base; })[0];
+  if (type === '特休') {
+    if (!b || b.quota == null) throw new Error('查不到你的到職日，暫時無法申請特休，請洽人事');
+    days.forEach(function (d) { if (d < b.from || d > b.to) throw new Error('特休請在本週年期間（' + b.from + '～' + b.to + '）內申請'); });
+  } else {
+    days.forEach(function (d) { if (d.slice(0, 4) !== info.today.slice(0, 4)) throw new Error('請分年度申請（' + info.today.slice(0, 4) + ' 年以外的日期請洽人事）'); });
+  }
+  var need = days.length * perDay;
+  if (b && b.quota != null && b.used + b.pending + need > b.quota)
+    throw new Error(base + '剩餘 ' + (b.quota - b.used - b.pending) + ' 小時，不足本次申請的 ' + need + ' 小時');
+  if (c.countsAs && c.days) {
+    var own = info.applications.filter(function (a) { return a.type === type && a.status !== '已駁回' && a.status !== '已取消'; }).reduce(function (x, a) { return x + a.hours; }, 0);
+    if (own + need > c.days * H) throw new Error(type + '一年最多 ' + c.days + ' 天');
+  }
+  if (c.monthDays) {
+    var byMonth = {};
+    days.forEach(function (d) { byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1; });
+    info.applications.forEach(function (a) { if (a.type === type && a.status !== '已駁回' && a.status !== '已取消') dateRange_(a.start, a.end).forEach(function (d) { byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1; }); });
+    Object.keys(byMonth).forEach(function (m) { if (byMonth[m] > c.monthDays) throw new Error(type + '每月最多 ' + c.monthDays + ' 天（' + m + '）'); });
+  }
 }

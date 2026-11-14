@@ -118,8 +118,11 @@
     var e = state.emp;
     $app.innerHTML = bar('<div class="who"><b>' + esc(e.name) + '</b>　' + esc(e.category || '') + '<br><span class="muted small">員編 ' + esc(e.empNo) + '</span></div>' +
       '<button class="btn sm" id="bout">登出</button>') +
+      (canLeave() ? '<div class="tabs">' + [['pay', '薪資・出勤'], ['leave', '請假']].map(function (t) { return '<button class="tab' + ((state.empMode || 'pay') === t[0] ? ' on' : '') + '" data-m="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>' : '') +
       '<div class="periods" id="plist"><span class="muted small">讀取中…</span></div><div id="pbody"></div>' + footer();
-    document.getElementById('bout').onclick = function () { state.emp = null; store('emp', null); route(); };
+    document.getElementById('bout').onclick = function () { state.emp = null; state.empMode = 'pay'; store('emp', null); route(); };
+    $app.querySelectorAll('[data-m]').forEach(function (b) { b.onclick = function () { state.empMode = b.dataset.m; viewEmployee(); }; });
+    if (canLeave() && state.empMode === 'leave') { document.getElementById('plist').innerHTML = ''; return viewLeave(document.getElementById('pbody')); }
     api('myPeriods', { token: e.token }).then(function (j) {
       state.periods = j.periods;
       var pl = document.getElementById('plist');
@@ -130,6 +133,62 @@
       pl.querySelectorAll('.chip').forEach(function (b) { b.onclick = function () { openPeriod(+b.dataset.i); }; });
       openPeriod(0);
     }).catch(function (err) { document.getElementById('plist').innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; });
+  }
+
+  function canLeave() { return state.emp && state.emp.category === '長期月薪'; }
+
+  /* ───────── 請假（長期月薪） ───────── */
+  function hh(h, H) { h = Math.round((Number(h) || 0) * 10) / 10; var d = H ? Math.round(h / H * 100) / 100 : 0; return h + ' 小時' + (H ? '<span class="muted small">（' + d + ' 天）</span>' : ''); }
+  var ST = { '審核中': 'orange', '已核准': 'green', '已駁回': 'red', '已取消': '' };
+  function balancesHtml(d) {
+    return '<div class="stats">' + d.balances.map(function (b) {
+      var rem = b.quota == null ? null : b.quota - b.used - b.pending;
+      return '<div class="stat' + (b.type === '特休' ? ' hl' : '') + '"><div class="k">' + esc(b.type) + '</div>' +
+        '<div class="v">' + (rem == null ? (b.used + b.pending) + '<small>小時已請</small>' : rem + '<small>小時可請</small>') + '</div>' +
+        '<div class="muted small">' + (b.quota != null ? '額度 ' + b.quota + 'h・' : '') + '已休 ' + b.used + 'h' + (b.pending ? '・審核中 ' + b.pending + 'h' : '') + '</div>' +
+        '<div class="muted small" style="margin-top:4px">' + esc(b.rule) + '</div></div>';
+    }).join('') + '</div><div class="muted small" style="margin:-8px 0 14px">額度以 1 天 = ' + d.dayHours + ' 小時換算。已休時數 = 已上傳的出勤紀錄 ＋ 已核准的申請。</div>';
+  }
+  function viewLeave(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('myLeave', { token: state.emp.token }).then(function (j) { renderLeave(body, j.data); })
+      .catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+  function renderLeave(body, d) {
+    var today = d.today.replace(/\//g, '-');
+    body.innerHTML = '<h3 style="margin:4px 0 10px">我的假別額度</h3>' + balancesHtml(d) +
+      '<form class="card" id="lvf"><h2>申請請假</h2><div class="row">' +
+      '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="field" style="margin:0;flex:1"><span>開始日</span><input type="date" name="start" value="' + today + '" required></label>' +
+      '<label class="field" style="margin:0;flex:1"><span>結束日</span><input type="date" name="end" value="' + today + '" required></label>' +
+      '<label class="field" style="margin:0;width:120px"><span>每日時數</span><input type="number" name="hpd" value="10" min="0.5" max="10" step="0.5" required></label></div>' +
+      '<label class="field"><span>事由（選填）</span><textarea name="reason" rows="2"></textarea></label>' +
+      '<div id="lvmsg"></div><div class="row" style="justify-content:flex-end"><button class="btn primary">送出申請</button></div></form>' +
+      '<h3 style="margin:18px 0 10px">我的申請紀錄</h3>' +
+      (d.applications.length ? '<div class="tbl-wrap"><table><thead><tr><th>假別</th><th>日期</th><th class="r">時數</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
+        d.applications.map(function (a) {
+          return '<tr><td>' + esc(a.type) + '</td><td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '</td><td class="r">' + a.hours + '</td><td class="small">' + esc(a.reason) + (a.note ? '<br><span class="muted">人事：' + esc(a.note) + '</span>' : '') + '</td>' +
+            '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span></td><td>' + (a.status === '審核中' ? '<button class="btn sm" data-cancel="' + esc(a.id) + '">取消</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : '<div class="empty">還沒有申請紀錄。</div>');
+    var f = document.getElementById('lvf');
+    f.start.onchange = function () { if (f.end.value < f.start.value) f.end.value = f.start.value; };
+    f.onsubmit = function (e) {
+      e.preventDefault();
+      var days = Math.round((new Date(f.end.value) - new Date(f.start.value)) / 864e5) + 1;
+      confirmBox('申請 <b>' + esc(f.type.value) + '</b>：' + esc(f.start.value) + (f.end.value !== f.start.value ? '～' + esc(f.end.value) : '') + '，共 ' + days + ' 天 × ' + f.hpd.value + ' 小時 = <b>' + (days * f.hpd.value) + ' 小時</b>？', '送出').then(function (ok) {
+        if (!ok) return;
+        api('applyLeave', { token: state.emp.token, type: f.type.value, start: f.start.value, end: f.end.value, hoursPerDay: Number(f.hpd.value), reason: f.reason.value })
+          .then(function (j) { renderLeave(body, j.data); modal('<div class="msg ok">已送出，等候人事審核。</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
+          .catch(function (err) { document.getElementById('lvmsg').innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; });
+      });
+    };
+    body.querySelectorAll('[data-cancel]').forEach(function (b) {
+      b.onclick = function () {
+        confirmBox('取消這筆請假申請？', '取消申請', true).then(function (ok) {
+          if (ok) api('cancelLeave', { token: state.emp.token, id: b.dataset.cancel }).then(function (j) { renderLeave(body, j.data); }).catch(function (e) { alertMsg(e.message); });
+        });
+      };
+    });
   }
 
   function openPeriod(i) {
@@ -236,14 +295,14 @@
   /* ───────── 管理員 ───────── */
   function viewAdmin() {
     var a = state.admin;
-    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
+    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
     $app.innerHTML = bar('<div class="who"><b>' + esc(a.name || '管理員') + '</b><br><span class="muted small">管理後台</span></div><button class="btn sm" id="apw">改密碼</button><button class="btn sm" id="aout">登出</button>') +
       '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (state.adminTab === t[0] ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div><div id="abody"></div>';
     document.getElementById('aout').onclick = function () { state.admin = null; store('admin', null); route(); };
     document.getElementById('apw').onclick = function () { viewChangePw(true, true); };
     $app.querySelectorAll('.tab').forEach(function (b) { b.onclick = function () { state.adminTab = b.dataset.t; viewAdmin(); }; });
     var body = document.getElementById('abody');
-    ({ upload: adminUpload, periods: adminPeriods, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
+    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
   }
 
   function adminUpload(body) {
@@ -442,6 +501,46 @@
       });
     };
     rd.readAsArrayBuffer(f);
+  }
+
+  function adminLeaves(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('adminLeaves', { token: state.admin.token }).then(function (j) {
+      var all = j.leaves, flt = state.leaveFilter || '審核中';
+      var pend = all.filter(function (a) { return a.status === '審核中'; }).length;
+      var list = flt === '全部' ? all : all.filter(function (a) { return a.status === flt; });
+      body.innerHTML = '<div class="row" style="margin-bottom:12px">' + ['審核中', '已核准', '已駁回', '全部'].map(function (k) {
+          return '<button class="chip' + (flt === k ? ' on' : '') + '" data-f="' + k + '">' + k + (k === '審核中' && pend ? '（' + pend + '）' : '') + '</button>'; }).join('') +
+        '<span class="muted small">點姓名可看該員工的假別額度。額度依「特休週年制、其他假別曆年制」計算；系統上線前已請的假，可在試算表「請假調整」分頁補登。</span></div>' +
+        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>申請時間</th><th>姓名</th><th>假別</th><th>日期</th><th class="r">時數</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
+          list.map(function (a, i) {
+            return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td><a href="#" data-who="' + esc(a.empNo) + '">' + esc(a.name) + '</a><br><span class="muted small">' + esc(a.empNo) + '</span></td><td>' + esc(a.type) + '</td>' +
+              '<td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '<br><span class="muted">每日 ' + a.perDay + 'h</span></td><td class="r">' + a.hours + '</td><td class="small">' + esc(a.reason) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + '</td>' +
+              '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.reviewer ? '<br><span class="muted small">' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</td>' +
+              '<td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' ? '<button class="btn sm primary" data-ok="' + esc(a.id) + '">核准</button><button class="btn sm danger" data-no="' + esc(a.id) + '">駁回</button>' :
+                a.status === '已核准' ? '<button class="btn sm" data-no="' + esc(a.id) + '">撤銷</button>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' : '<div class="empty">沒有' + (flt === '全部' ? '' : '「' + flt + '」的') + '申請。</div>');
+      body.querySelectorAll('[data-f]').forEach(function (b) { b.onclick = function () { state.leaveFilter = b.dataset.f; adminLeaves(body); }; });
+      body.querySelectorAll('[data-who]').forEach(function (b) {
+        b.onclick = function (e) {
+          e.preventDefault();
+          api('adminLeaveInfo', { token: state.admin.token, empNo: b.dataset.who }).then(function (r) {
+            modal('<div class="row" style="justify-content:space-between;margin-bottom:10px"><b>' + esc(r.data.emp.name) + ' 的假別額度</b><button class="btn sm" data-close>關閉</button></div>' + balancesHtml(r.data));
+          }).catch(function (err) { alertMsg(err.message); });
+        };
+      });
+      function review(id, approve) {
+        var a = all.filter(function (x) { return x.id === id; })[0];
+        modal('<b>' + (approve ? '核准' : (a.status === '已核准' ? '撤銷' : '駁回')) + '：' + esc(a.name) + ' ' + esc(a.type) + ' ' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '（' + a.hours + ' 小時）</b>' +
+          '<label class="field"><span>備註（選填，員工看得到）</span><input id="rvnote" autocomplete="off"></label><div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button><button class="btn ' + (approve ? 'primary' : 'danger') + '" id="rvok">確定</button></div>', function (m, close) {
+          m.querySelector('#rvok').onclick = function () {
+            api('reviewLeave', { token: state.admin.token, id: id, approve: approve, note: m.querySelector('#rvnote').value }).then(function () { close(); adminLeaves(body); }).catch(function (e) { alertMsg(e.message); });
+          };
+        });
+      }
+      body.querySelectorAll('[data-ok]').forEach(function (b) { b.onclick = function () { review(b.dataset.ok, true); }; });
+      body.querySelectorAll('[data-no]').forEach(function (b) { b.onclick = function () { review(b.dataset.no, false); }; });
+    }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
   }
 
   function adminLogs(body) {
