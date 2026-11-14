@@ -674,7 +674,7 @@ function leaveEmp_(empNo, adminView) {
   var hire = '';
   var an = db_().getSheetByName('特休').getDataRange().getValues();
   for (var i = an.length - 1; i >= 1; i--) if (String(an[i][1]) === String(row[0]) && an[i][2]) { hire = normDate_(an[i][2]); break; }
-  return { empNo: String(row[0]), name: row[2], category: row[3], hire: hire };
+  return { empNo: String(row[0]), name: row[2], category: row[3], hire: hire, adminView: !!adminView };
 }
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
@@ -737,11 +737,11 @@ function leaveInfo_(emp, excludeId) {
         var dt = sum('特休', w.start, cEnd); dU = dt.used + dt.pending;
         if (today <= cEnd) { quota = base + carry; rule += '；含上期遞延 ' + carry + ' 小時，使用期限至 ' + cEnd; }
         else { var useC = Math.min(carry, dU); quota = base + useC; expired = carry - useC;
-               rule += '；上期遞延 ' + carry + ' 小時已於 ' + cEnd + ' 到期' + (expired ? '，未休 ' + expired + ' 小時應折發工資' : '（已休完）'); }
+               if (emp.adminView) rule += '；上期遞延 ' + carry + ' 小時已於 ' + cEnd + ' 到期' + (expired ? '，未休 ' + expired + ' 小時應折發工資' : '（已休完）'); }
       }
     }
     out.balances.push({ type: '特休', rule: rule, from: w.start, to: w.end, quota: quota, used: t.used, pending: t.pending,
-      base: base, carry: carry, carryEnd: cEnd, carryUsed: dU, carryExpired: expired, carryActive: !!carry && today <= cEnd });
+      base: base, carry: carry, carryEnd: cEnd, carryUsed: dU, carryExpired: emp.adminView ? expired : 0, carryActive: !!carry && today <= cEnd });
   } else {
     out.balances.push({ type: '特休', rule: '尚無到職日資料（上傳含「特休」分頁的長期附表後自動帶入）', from: '', to: '', quota: null, used: 0, pending: 0 });
   }
