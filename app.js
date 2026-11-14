@@ -247,6 +247,20 @@
       }
     });
   }
+  /* 某假別目前可請的剩餘時數（修改中的申請，自己的時數加回來） */
+  var LV_AS = { '家庭照顧假': '事假' };
+  function leaveRemain(d, t, ed) {
+    var key = LV_AS[t] || t, b = d.balances.filter(function (x) { return x.type === key; })[0];
+    var back = ed && ed.status === '審核中' && (LV_AS[ed.type] || ed.type) === key ? Number(ed.hours) || 0 : 0;
+    if (!b) return { left: null, note: '不限額度' };
+    if (b.freeLeft != null) {
+      var fl = Math.round((b.freeLeft + back) * 10) / 10;
+      return { left: fl, note: '全年還有 ' + fl + ' 小時不併入病假（每月最多 ' + d.workday + ' 小時）' };
+    }
+    if (b.quota == null) return { left: null, note: '不限額度，今年已請 ' + (b.used + b.pending - back) + ' 小時' };
+    var l = Math.round((b.quota - b.used - b.pending + back) * 10) / 10;
+    return { left: l, note: (LV_AS[t] ? '併入事假計算，' : '') + '額度 ' + b.quota + ' 小時，剩餘 ' + Math.max(0, l) + ' 小時' + (b.pending - back > 0 ? '（含審核中 ' + (b.pending - back) + ' 小時已先扣）' : '') };
+  }
   function renderLeave(body, d, editing) {
     var today = d.today.replace(/\//g, '-'), ed = editing || null;
     var v = ed ? { type: ed.type, start: ed.start.replace(/\//g, '-'), end: ed.end.replace(/\//g, '-'), mode: ed.startTime && ed.startTime !== '整天' ? 'hour' : 'day',
@@ -254,7 +268,7 @@
                : { type: d.types[0], start: today, end: today, mode: 'day', st: '08:00', en: '12:00', reason: '' };
     body.innerHTML = '<h3 style="margin:4px 0 10px">我的假別額度</h3>' + balancesHtml(d) +
       '<form class="card" id="lvf"><h2>' + (ed ? '修改請假申請' : '申請請假') + '</h2><div class="row">' +
-      '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { return '<option' + (t === v.type ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { var r = leaveRemain(d, t, ed); return '<option value="' + esc(t) + '"' + (t === v.type ? ' selected' : '') + '>' + esc(t) + (r.left != null ? '（剩 ' + Math.max(0, r.left) + ' 小時）' : '') + '</option>'; }).join('') + '</select><div id="lvrem" class="small" style="margin-top:4px"></div></label>' +
       '<label class="field" style="margin:0;flex:1"><span>開始日</span><input type="date" name="start" value="' + v.start + '" required></label>' +
       '<label class="field" style="margin:0;flex:1"><span>結束日</span><input type="date" name="end" value="' + v.end + '" required></label></div>' +
       '<div class="row" style="margin-top:12px">' +
@@ -281,6 +295,9 @@
       var needProof = d.proofRequired.indexOf(t) >= 0;
       document.getElementById('lvproof').style.display = needProof ? '' : 'none';
       document.getElementById('lvproof').querySelector('span').firstChild.nodeValue = needProof ? '證明（照片或 PDF，必附）' : '證明';
+      var r = leaveRemain(d, t, ed), tot = h > 0 ? h * days() : 0, after = r.left != null ? Math.round((r.left - tot) * 10) / 10 : null;
+      document.getElementById('lvrem').innerHTML = '<span class="muted">' + esc(r.note) + '</span>' +
+        (after != null && tot > 0 ? '<br>這次請 ' + tot + ' 小時，' + (after >= 0 ? '請完剩 <b>' + after + '</b> 小時' : '<b style="color:var(--bad)">超過 ' + (-after) + ' 小時</b>' + (t === '特休' ? '，特休不足無法送出' : '，仍可送出，由人事審核')) : '');
       document.getElementById('lvhrs').innerHTML = h > 0 ? '每日 <b>' + h + '</b> 小時' + (days() > 1 ? '，' + days() + ' 個日期合計 <b>' + (h * days()) + '</b> 小時' : '') : '<span style="color:var(--bad)">時間不正確</span>';
       return h;
     }
