@@ -24,7 +24,8 @@ var LEAVE_TYPES = {
   '特休': { year: 'anniversary' },
   '事假': { year: 'calendar', days: 14 },
   '病假': { year: 'calendar', days: 30 },
-  '生理假': { year: 'calendar', days: 12, monthDays: 1 },
+  // 性別平等工作法第 14 條：每月 1 日；全年前 3 日不併入病假，超過的併入病假；病假請滿 30 日後仍須給假（超過部分可不支薪）
+  '生理假': { year: 'calendar', monthDays: 1, separateDays: 3, overflowTo: '病假' },
   '婚假': { year: 'calendar' },
   '喪假': { year: 'calendar' },
   '公假': { year: 'calendar' },
@@ -203,12 +204,12 @@ var ACTIONS = {
         mine.forEach(function (a) { if (d >= a.start && d <= a.end) throw new Error(d + ' 已經有請假申請（' + a.type + '）'); });
       });
       var total = perDay * days.length;
-      checkQuota_(info, type, days, perDay);
+      var warn = checkQuota_(info, type, days, perDay) || '';
       var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
       sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '']);
     } finally { lock.releaseLock(); }
     log_(emp.empNo, '申請請假', type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + total + 'h');
-    return { ok: true, data: leaveInfo_(emp) };
+    return { ok: true, data: leaveInfo_(emp), warning: warn };
   },
 
   cancelLeave: function (r) {
@@ -637,11 +638,20 @@ function leaveInfo_(emp) {
   } else {
     out.balances.push({ type: '特休', rule: '尚無到職日資料（上傳含「特休」分頁的長期附表後自動帶入）', from: '', to: '', quota: null, used: 0, pending: 0 });
   }
+  var Y0 = year + '/01/01', Y1 = year + '/12/31';
+  // 生理假超過全年 3 日的部分併入病假
+  var mc = sum('生理假', Y0, Y1), free = LEAVE_TYPES['生理假'].separateDays * H;
+  var ovUsed = Math.max(0, mc.used - free), ovAll = Math.max(0, mc.used + mc.pending - free);
   Object.keys(LEAVE_TYPES).forEach(function (ty) {
     var c = LEAVE_TYPES[ty];
     if (ty === '特休' || c.countsAs) return;
-    var t = sum(ty, year + '/01/01', year + '/12/31');
-    if (c.days || t.used || t.pending) out.balances.push({ type: ty, rule: '曆年制（' + year + '/01/01～' + year + '/12/31）', from: year + '/01/01', to: year + '/12/31', quota: c.days ? c.days * H : null, used: t.used, pending: t.pending });
+    var t = sum(ty, Y0, Y1), rule = '曆年制（' + Y0 + '～' + Y1 + '）';
+    if (ty === '病假' && ovAll) { t.used += ovUsed; t.pending += ovAll - ovUsed; rule += '；含生理假超過 3 日併入 ' + ovAll + 'h'; }
+    if (ty === '生理假') {
+      out.balances.push({ type: ty, rule: '每月 1 日；全年前 3 日（' + free + 'h）不併入病假，超過併入病假', from: Y0, to: Y1, quota: null, used: t.used, pending: t.pending, freeLeft: Math.max(0, free - t.used - t.pending) });
+      return;
+    }
+    if (c.days || t.used || t.pending) out.balances.push({ type: ty, rule: rule, from: Y0, to: Y1, quota: c.days ? c.days * H : null, used: t.used, pending: t.pending });
   });
   return out;
 }
@@ -654,17 +664,24 @@ function checkQuota_(info, type, days, perDay) {
   } else {
     days.forEach(function (d) { if (d.slice(0, 4) !== info.today.slice(0, 4)) throw new Error('請分年度申請（' + info.today.slice(0, 4) + ' 年以外的日期請洽人事）'); });
   }
-  var need = days.length * perDay;
-  if (b && b.quota != null && b.used + b.pending + need > b.quota)
-    throw new Error(base + '剩餘 ' + (b.quota - b.used - b.pending) + ' 小時，不足本次申請的 ' + need + ' 小時');
-  if (c.countsAs && c.days) {
-    var own = info.applications.filter(function (a) { return a.type === type && a.status !== '已駁回' && a.status !== '已取消'; }).reduce(function (x, a) { return x + a.hours; }, 0);
-    if (own + need > c.days * H) throw new Error(type + '一年最多 ' + c.days + ' 天');
-  }
   if (c.monthDays) {
     var byMonth = {};
     days.forEach(function (d) { byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1; });
     info.applications.forEach(function (a) { if (a.type === type && a.status !== '已駁回' && a.status !== '已取消') dateRange_(a.start, a.end).forEach(function (d) { byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1; }); });
     Object.keys(byMonth).forEach(function (m) { if (byMonth[m] > c.monthDays) throw new Error(type + '每月最多 ' + c.monthDays + ' 天（' + m + '）'); });
+  }
+  var need = days.length * perDay;
+  if (type === '生理假') {
+    var sick = info.balances.filter(function (x) { return x.type === '病假'; })[0], g = b.freeLeft;
+    var over = Math.max(0, need - g);
+    if (over && sick && sick.used + sick.pending + over > sick.quota) return '病假已達 30 日上限，這次生理假仍會給假，但超過的部分可能不支薪';
+    if (over) return '今年不併入病假的 3 日已用完，這次有 ' + over + ' 小時會併入病假計算';
+    return '';
+  }
+  if (b && b.quota != null && b.used + b.pending + need > b.quota)
+    throw new Error(base + '剩餘 ' + Math.max(0, b.quota - b.used - b.pending) + ' 小時，不足本次申請的 ' + need + ' 小時');
+  if (c.countsAs && c.days) {
+    var own = info.applications.filter(function (a) { return a.type === type && a.status !== '已駁回' && a.status !== '已取消'; }).reduce(function (x, a) { return x + a.hours; }, 0);
+    if (own + need > c.days * H) throw new Error(type + '一年最多 ' + c.days + ' 天');
   }
 }

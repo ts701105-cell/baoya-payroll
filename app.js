@@ -144,7 +144,7 @@
     return '<div class="stats">' + d.balances.map(function (b) {
       var rem = b.quota == null ? null : b.quota - b.used - b.pending;
       return '<div class="stat' + (b.type === '特休' ? ' hl' : '') + '"><div class="k">' + esc(b.type) + '</div>' +
-        '<div class="v">' + (rem == null ? (b.used + b.pending) + '<small>小時已請</small>' : rem + '<small>小時可請</small>') + '</div>' +
+        '<div class="v">' + (b.freeLeft != null ? b.freeLeft + '<small>小時不併入病假</small>' : rem == null ? (b.used + b.pending) + '<small>小時已請</small>' : Math.max(0, rem) + '<small>小時可請</small>') + '</div>' +
         '<div class="muted small">' + (b.quota != null ? '額度 ' + b.quota + 'h・' : '') + '已休 ' + b.used + 'h' + (b.pending ? '・審核中 ' + b.pending + 'h' : '') + '</div>' +
         '<div class="muted small" style="margin-top:4px">' + esc(b.rule) + '</div></div>';
     }).join('') + '</div><div class="muted small" style="margin:-8px 0 14px">額度以 1 天 = ' + d.dayHours + ' 小時換算。已休時數 = 已上傳的出勤紀錄 ＋ 已核准的申請。</div>';
@@ -178,7 +178,7 @@
       confirmBox('申請 <b>' + esc(f.type.value) + '</b>：' + esc(f.start.value) + (f.end.value !== f.start.value ? '～' + esc(f.end.value) : '') + '，共 ' + days + ' 天 × ' + f.hpd.value + ' 小時 = <b>' + (days * f.hpd.value) + ' 小時</b>？', '送出').then(function (ok) {
         if (!ok) return;
         api('applyLeave', { token: state.emp.token, type: f.type.value, start: f.start.value, end: f.end.value, hoursPerDay: Number(f.hpd.value), reason: f.reason.value })
-          .then(function (j) { renderLeave(body, j.data); modal('<div class="msg ok">已送出，等候人事審核。</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
+          .then(function (j) { renderLeave(body, j.data); modal('<div class="msg ok">已送出，等候人事審核。</div>' + (j.warning ? '<div class="msg warn">' + esc(j.warning) + '</div>' : '') + '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
           .catch(function (err) { document.getElementById('lvmsg').innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; });
       });
     };
