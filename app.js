@@ -242,10 +242,7 @@
           img.src = rd.result;
         };
         rd.readAsDataURL(file);
-      } else {
-        rd.onload = function () { res({ name: file.name, mime: file.type || 'application/octet-stream', data: String(rd.result).split(',')[1] }); };
-        rd.readAsDataURL(file);
-      }
+      } else rej(new Error('證明請上傳照片（JPG）'));
     });
   }
   /* 某假別目前可請的剩餘時數（修改中的申請，自己的時數加回來） */
@@ -278,7 +275,7 @@
       '<label class="field lvtime" style="margin:0;width:130px"><span>每日結束時間</span>' + timeSelect('en', v.en) + '</label>' +
       '<div id="lvhrs" class="muted small" style="align-self:flex-end;padding-bottom:10px"></div></div>' +
       '<label class="field" id="lvreason"><span>事由</span><textarea name="reason" rows="2">' + esc(v.reason) + '</textarea></label>' +
-      '<label class="field" id="lvproof"><span>證明（照片或 PDF）' + (ed && ed.proofName ? '　<span class="muted">已上傳：' + esc(ed.proofName) + '，要更換再選檔</span>' : '') + '</span><input type="file" name="proof" accept="image/*,.pdf"></label>' +
+      '<label class="field" id="lvproof"><span>證明照片' + (ed && ed.proofName ? '　<span class="muted">已上傳：' + esc(ed.proofName) + '，要更換再選檔</span>' : '') + '</span><input type="file" name="proof" accept="image/jpeg,image/*"><div class="muted small">可直接拍照或選手機裡的照片，系統會存成 JPG</div></label>' +
       '<div id="lvmsg"></div><div class="row" style="justify-content:flex-end">' + (ed ? '<button type="button" class="btn" id="lvcancel">取消修改</button>' : '') + '<button class="btn primary">' + (ed ? '儲存修改' : '送出申請') + '</button></div></form>' +
       '<h3 style="margin:18px 0 10px">我的申請紀錄</h3>' +
       (d.applications.length ? '<div class="tbl-wrap"><table><thead><tr><th>申請時間</th><th>假別</th><th>日期</th><th>時間</th><th class="r">時數</th><th>事由／證明</th><th>狀態</th><th></th></tr></thead><tbody>' +
@@ -295,7 +292,7 @@
       document.getElementById('lvreason').style.display = d.noReason.indexOf(t) >= 0 ? 'none' : '';
       var needProof = d.proofRequired.indexOf(t) >= 0;
       document.getElementById('lvproof').style.display = needProof ? '' : 'none';
-      document.getElementById('lvproof').querySelector('span').firstChild.nodeValue = needProof ? '證明（照片或 PDF，必附）' : '證明';
+      document.getElementById('lvproof').querySelector('span').firstChild.nodeValue = needProof ? '證明照片（必附，拍照或上傳）' : '證明照片';
       var r = leaveRemain(d, t, ed), tot = h > 0 ? h * days() : 0, after = r.left != null ? Math.round((r.left - tot) * 10) / 10 : null;
       document.getElementById('lvrem').innerHTML = '<span class="muted">' + esc(r.note) + '</span>' +
         (after != null && tot > 0 ? '<br>這次請 ' + tot + ' 小時，' + (after >= 0 ? '請完剩 <b>' + after + '</b> 小時' : '<b style="color:var(--bad)">超過 ' + (-after) + ' 小時</b>' + (t === '特休' ? '，特休不足無法送出' : '，仍可送出，由人事審核')) : '');
@@ -310,7 +307,7 @@
       var h = refresh(), t = f.type.value, msg = document.getElementById('lvmsg');
       if (!(h > 0)) { msg.innerHTML = '<div class="msg err">請確認請假時間</div>'; return; }
       var file = f.proof.files[0];
-      if (d.proofRequired.indexOf(t) >= 0 && !file && !(ed && ed.proofName)) { msg.innerHTML = '<div class="msg err">' + esc(t) + '需要上傳證明</div>'; return; }
+      if (d.proofRequired.indexOf(t) >= 0 && !file && !(ed && ed.proofName)) { msg.innerHTML = '<div class="msg err">' + esc(t) + '需要上傳證明照片</div>'; return; }
       var whole = f.mode.value === 'day';
       confirmBox((ed ? '修改為 ' : '申請 ') + '<b>' + esc(t) + '</b>：' + esc(f.start.value) + (f.end.value !== f.start.value ? '～' + esc(f.end.value) : '') + ' ' + (whole ? '整天' : f.st.value + '–' + f.en.value) + '，合計 <b>' + (h * days()) + ' 小時</b>？', ed ? '儲存' : '送出').then(function (ok) {
         if (!ok) return;

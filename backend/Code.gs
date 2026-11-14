@@ -24,9 +24,9 @@ var APP = {
   LEAVE_MAX_DAY_HOURS: 12,  // 每日請假最多時數
   WORKDAY_HOURS: 10,        // 以「整天」請假時，1 天 = 幾小時（寶雅月薪人員）
   WORKDAY_HOURS_BY_EMP: { '164580': 8 }, // 例外：張銘峰 1 天 = 8 小時
-  PROOF_REQUIRED: ['病假'],     // 必須上傳證明的假別
+  PROOF_REQUIRED: ['病假', '婚假', '喪假'],     // 必須上傳證明的假別
   NO_REASON: ['特休', '事假'],  // 不用填理由的假別
-  PROOF_FOLDER: '寶雅請假證明'   // 證明檔存放的雲端硬碟資料夾
+  PROOF_FOLDER: '寶雅請假證明', PROOF_FOLDER_ID: '1ZetbsXfFYGd5cI7ISAxoQE6zQNotzHHY'   // 證明檔存放的雲端硬碟資料夾
 };
 
 /* 請假額度：特休依到職日（週年制），其他假別依曆年（1/1–12/31） */
@@ -868,16 +868,24 @@ function leaveHours_(st, en) {
   if (h > APP.LEAVE_MAX_DAY_HOURS) throw new Error('每日請假最多 ' + APP.LEAVE_MAX_DAY_HOURS + ' 小時');
   return h;
 }
-function saveProof_(emp, id, proof) {
-  if (!proof || !proof.data) return null;
-  if (String(proof.data).length > 14000000) throw new Error('證明檔太大，請小於 10MB');
+function proofFolder_() {
+  if (APP.PROOF_FOLDER_ID) return DriveApp.getFolderById(APP.PROOF_FOLDER_ID);
   var props = PropertiesService.getScriptProperties(), fid = props.getProperty('PROOF_FOLDER_ID'), folder = null;
   if (fid) { try { folder = DriveApp.getFolderById(fid); } catch (e) { folder = null; } }
   if (!folder) { folder = DriveApp.createFolder(APP.PROOF_FOLDER); props.setProperty('PROOF_FOLDER_ID', folder.getId()); }
-  var ext = (String(proof.name || '').match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0];
-  var blob = Utilities.newBlob(Utilities.base64Decode(proof.data), proof.mime || 'application/octet-stream', id + '_' + emp.empNo + '_' + emp.name + ext);
-  var f = folder.createFile(blob);
-  return { id: f.getId(), name: String(proof.name || f.getName()) };
+  return folder;
+}
+/* 證明檔名：姓名-西元年月日-請假時段.jpg，例：李雅婷-20261102-0830-1230.jpg、李雅婷-20261102至20261104-整天.jpg */
+function proofName_(emp, start, end, st, en) {
+  var d = function (x) { return String(x).replace(/\//g, ''); };
+  return emp.name + '-' + d(start) + (end !== start ? '至' + d(end) : '') + '-' + (st === '整天' ? '整天' : String(st).replace(':', '') + '-' + String(en).replace(':', '')) + '.jpg';
+}
+function saveProof_(emp, name, proof) {
+  if (!proof || !proof.data) return null;
+  if (String(proof.data).length > 14000000) throw new Error('證明檔太大，請小於 10MB');
+  if (proof.mime !== 'image/jpeg') throw new Error('證明請上傳照片（JPG）');
+  var f = proofFolder_().createFile(Utilities.newBlob(Utilities.base64Decode(proof.data), 'image/jpeg', name));
+  return { id: f.getId(), name: name };
 }
 /* 新增或修改一筆請假；byAdmin 時可改已核准的申請 */
 function saveLeave_(emp, r, editId, actor, byAdmin) {
@@ -906,10 +914,12 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
     var mine = info.applications.filter(function (a) { return a.status !== '已駁回' && a.status !== '已取消'; });
     days.forEach(function (d) { mine.forEach(function (a) { if (d >= a.start && d <= a.end) throw new Error(d + ' 已經有請假申請（' + a.type + '）'); }); });
     warn = checkQuota_(info, type, days, perDay) || '';
-    var proof = saveProof_(emp, editId || 'new', r.proof);
+    var pname = proofName_(emp, start, end, st, en);
+    var proof = saveProof_(emp, pname, r.proof);
     var oldProof = row ? { id: String(row.data[17] || ''), name: String(row.data[18] || '') } : { id: '', name: '' };
     var pf = proof || oldProof;
-    if (APP.PROOF_REQUIRED.indexOf(type) >= 0 && !pf.id && !byAdmin) throw new Error(type + '需要上傳證明（照片或 PDF）');
+    if (!proof && pf.id && pf.name !== pname) { try { DriveApp.getFileById(pf.id).setName(pname); pf = { id: pf.id, name: pname }; } catch (e) {} }  // 修改日期／時段時，舊照片跟著改名
+    if (APP.PROOF_REQUIRED.indexOf(type) >= 0 && !pf.id && !byAdmin) throw new Error(type + '需要上傳證明照片');
     if (row) {
       var d0 = row.data, before = d0[3] + ' ' + normDate_(d0[4]) + (normDate_(d0[5]) !== normDate_(d0[4]) ? '～' + normDate_(d0[5]) : '') + ' ' + timeLabel_(d0[15], d0[16]) + ' ' + d0[7] + 'h';
       var hist = (d0[19] ? d0[19] + '\n' : '') + now_() + ' ' + actor + ' 修改（原：' + before + '）';
@@ -917,7 +927,6 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
       row.sh.getRange(row.i + 1, 15, 1, 6).setValues([[warn, st, en, pf.id, pf.name, hist]]);
     } else {
       var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
-      if (proof) { try { DriveApp.getFileById(proof.id).setName(id + '_' + emp.empNo + '_' + emp.name + (proof.name.match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0]); } catch (e) {} }
       sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn, st, en, pf.id, pf.name, '']);
     }
   } finally { lock.releaseLock(); }
