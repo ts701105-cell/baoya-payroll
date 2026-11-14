@@ -161,7 +161,7 @@
       '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
       '<label class="field" style="margin:0;flex:1"><span>開始日</span><input type="date" name="start" value="' + today + '" required></label>' +
       '<label class="field" style="margin:0;flex:1"><span>結束日</span><input type="date" name="end" value="' + today + '" required></label>' +
-      '<label class="field" style="margin:0;width:120px"><span>每日時數</span><input type="number" name="hpd" value="10" min="0.5" max="10" step="0.5" required></label></div>' +
+      '<label class="field" style="margin:0;width:120px"><span>每日時數</span><input type="number" name="hpd" value="8" min="0.5" max="10" step="0.5" required></label></div>' +
       '<label class="field"><span>事由（選填）</span><textarea name="reason" rows="2"></textarea></label>' +
       '<div id="lvmsg"></div><div class="row" style="justify-content:flex-end"><button class="btn primary">送出申請</button></div></form>' +
       '<h3 style="margin:18px 0 10px">我的申請紀錄</h3>' +
