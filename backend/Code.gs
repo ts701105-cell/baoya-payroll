@@ -22,6 +22,8 @@ var APP = {
   LEAVE_BREAKS: [],         // 請假時數 = 結束 − 開始，不扣午休與休息（要扣時填入時段，例 [['12:00','13:00']]）
   LEAVE_BREAKS_NIGHT: [],
   LEAVE_MAX_DAY_HOURS: 12,  // 每日請假最多時數
+  WORKDAY_HOURS: 10,        // 以「整天」請假時，1 天 = 幾小時（寶雅月薪人員）
+  WORKDAY_HOURS_BY_EMP: { '164580': 8 }, // 例外：張銘峰 1 天 = 8 小時
   PROOF_REQUIRED: ['病假'],     // 必須上傳證明的假別
   NO_REASON: ['特休', '事假'],  // 不用填理由的假別
   PROOF_FOLDER: '寶雅請假證明'   // 證明檔存放的雲端硬碟資料夾
@@ -439,7 +441,7 @@ var ACTIONS = {
   adminLeaves: function (r) {
     auth_(r.token, 'admin');
     var data = sheet_('請假').getDataRange().getValues(), out = [];
-    for (var i = 1; i < data.length; i++) out.push(leaveRow_(data[i]));
+    for (var i = 1; i < data.length; i++) { var x = leaveRow_(data[i]); x.workday = workdayHours_(x.empNo); out.push(x); }
     out.sort(function (a, b) { return (a.status === '審核中') !== (b.status === '審核中') ? (a.status === '審核中' ? -1 : 1) : (a.appliedAt < b.appliedAt ? 1 : -1); });
     return { ok: true, leaves: out, types: Object.keys(LEAVE_TYPES), breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT) };
   },
@@ -720,7 +722,7 @@ function leaveInfo_(emp, excludeId) {
     return t;
   }
   var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
-    breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT), proofRequired: APP.PROOF_REQUIRED, noReason: APP.NO_REASON };
+    breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT), proofRequired: APP.PROOF_REQUIRED, noReason: APP.NO_REASON, workday: workdayHours_(emp.empNo) };
   if (emp.hire) {
     var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end);
     out.balances.push({ type: '特休', rule: '週年制（到職日 ' + emp.hire + '，' + w.label + '）', from: w.start, to: w.end, quota: w.days * H, used: t.used, pending: t.pending });
@@ -860,7 +862,9 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
   if (!LEAVE_TYPES[type]) throw new Error('請選擇假別');
   if (!start || !end) throw new Error('請填請假日期');
   if (end < start) throw new Error('結束日不能早於開始日');
-  var perDay = leaveHours_(st, en);
+  var whole = r.mode === 'day';
+  var perDay = whole ? workdayHours_(emp.empNo) : leaveHours_(st, en);
+  if (whole) { st = '整天'; en = ''; }
   var days = dateRange_(start, end);
   if (days.length > 31) throw new Error('一次申請的日期範圍最多一個月');
   if (APP.NO_REASON.indexOf(type) >= 0) reason = '';
@@ -883,7 +887,7 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
     var pf = proof || oldProof;
     if (APP.PROOF_REQUIRED.indexOf(type) >= 0 && !pf.id && !byAdmin) throw new Error(type + '需要上傳證明（照片或 PDF）');
     if (row) {
-      var d0 = row.data, before = d0[3] + ' ' + normDate_(d0[4]) + (normDate_(d0[5]) !== normDate_(d0[4]) ? '～' + normDate_(d0[5]) : '') + ' ' + (d0[15] || '') + '–' + (d0[16] || '') + ' ' + d0[7] + 'h';
+      var d0 = row.data, before = d0[3] + ' ' + normDate_(d0[4]) + (normDate_(d0[5]) !== normDate_(d0[4]) ? '～' + normDate_(d0[5]) : '') + ' ' + timeLabel_(d0[15], d0[16]) + ' ' + d0[7] + 'h';
       var hist = (d0[19] ? d0[19] + '\n' : '') + now_() + ' ' + actor + ' 修改（原：' + before + '）';
       row.sh.getRange(row.i + 1, 4, 1, 6).setValues([[type, start, end, perDay, total, reason]]);
       row.sh.getRange(row.i + 1, 15, 1, 6).setValues([[warn, st, en, pf.id, pf.name, hist]]);
@@ -893,8 +897,12 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
       sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn, st, en, pf.id, pf.name, '']);
     }
   } finally { lock.releaseLock(); }
-  return { warn: warn, summary: type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + st + '–' + en + ' ' + total + 'h' };
+  return { warn: warn, summary: type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + timeLabel_(st, en) + ' ' + total + 'h' };
 }
+function timeLabel_(st, en) { return st === '整天' ? '整天' : (st ? st + '–' + en : ''); }
+/* 以「整天」請假時 1 天的時數 */
+function workdayHours_(empNo) { var h = APP.WORKDAY_HOURS_BY_EMP[String(empNo)]; return h ? h : APP.WORKDAY_HOURS; }
+
 /* 第一次使用上傳證明前，在編輯器執行一次，授權存取雲端硬碟 */
 function authorizeDrive() {
   var f = DriveApp.getRootFolder();
