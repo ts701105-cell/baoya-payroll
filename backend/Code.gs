@@ -13,7 +13,8 @@ var APP = {
   NAME: '寶雅薪資差勤查詢系統',
   TOKEN_HOURS: 6,
   MAX_FAIL: 5,          // 連續輸錯幾次後鎖定
-  LOCK_MINUTES: 15
+  LOCK_MINUTES: 15,
+  FIXED_PASSWORD: true  // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
 };
 
 var SHEETS = {
@@ -97,12 +98,13 @@ var ACTIONS = {
       if (String(row[0]).toUpperCase() !== id && String(row[1]).toUpperCase() !== id) continue;
       if (row[8] === '停用') throw new Error('帳號已停用，請洽人事');
       var ok = false;
-      if (row[5]) ok = hash_(pw, row[6]) === row[5];
+      var norm = pw.trim().toUpperCase();
+      if (row[5]) ok = hash_(norm, row[6]) === row[5] || hash_(pw, row[6]) === row[5];
       else if (row[4]) ok = String(row[4]).trim().toUpperCase() === pw.trim().toUpperCase();
       else throw new Error('帳號尚未開通，請洽人事');
       if (!ok) { fail_('emp:' + id); log_(String(row[0]), '登入失敗', ''); throw new Error('員編或密碼錯誤'); }
       clearFail_('emp:' + id);
-      var mustChange = !row[5] || row[7] === 'Y';
+      var mustChange = APP.FIXED_PASSWORD ? false : (!row[5] || row[7] === 'Y');
       var token = issueToken_({ role: 'emp', id: String(row[0]) });
       log_(String(row[0]), '登入', '');
       return { ok: true, token: token, name: row[2], empNo: String(row[0]), category: row[3], mustChange: mustChange };
@@ -113,6 +115,7 @@ var ACTIONS = {
 
   changePassword: function (r) {
     var s = auth_(r.token);
+    if (s.role !== 'admin' && APP.FIXED_PASSWORD) throw new Error('密碼由人事統一設定，無法自行變更；如有問題請洽人事');
     var pw = String(r.newPassword || '');
     if (pw.length < 6) throw new Error('新密碼至少 6 碼');
     var sheet = s.role === 'admin' ? '管理員' : '員工';
@@ -259,7 +262,7 @@ var ACTIONS = {
     var data = db_().getSheetByName('員工').getDataRange().getValues();
     var out = [];
     for (var i = 1; i < data.length; i++) {
-      var st = data[i][8] === '停用' ? '停用' : data[i][5] ? '已啟用' : data[i][4] ? '待首次登入' : '未開通';
+      var st = data[i][8] === '停用' ? '停用' : data[i][5] ? '已啟用' : data[i][4] ? (APP.FIXED_PASSWORD ? '已啟用' : '待首次登入') : '未開通';
       out.push({ empNo: String(data[i][0]), tcNo: data[i][1], name: data[i][2], category: data[i][3], status: st, updated: data[i][9] });
     }
     return { ok: true, employees: out };
@@ -270,9 +273,46 @@ var ACTIONS = {
     var pw = String(r.initial || '').trim().toUpperCase();
     if (pw.length < 6) throw new Error('初始密碼至少 6 碼（建議用身分證字號）');
     var row = findEmp_(r.empNo);
-    row.sh.getRange(row.i + 1, 5, 1, 5).setValues([[pw, '', '', 'Y', '啟用']]);
+    if (APP.FIXED_PASSWORD) {
+      var salt = Utilities.getUuid();
+      row.sh.getRange(row.i + 1, 5, 1, 5).setValues([['', hash_(pw, salt), salt, '', '啟用']]); // 只存雜湊，不留身分證號
+    } else {
+      row.sh.getRange(row.i + 1, 5, 1, 5).setValues([[pw, '', '', 'Y', '啟用']]);
+    }
     log_(s.id, '設定初始密碼', r.empNo);
     return { ok: true };
+  },
+
+  /* 從「員工資料日城.xlsx」整批匯入員工並設定密碼（身分證字號，只存雜湊） */
+  importEmployees: function (r) {
+    var s = auth_(r.token, 'admin');
+    var list = r.employees || [];
+    if (!list.length) throw new Error('沒有可匯入的員工');
+    var lock = LockService.getScriptLock(); lock.waitLock(30000);
+    var added = 0, updated = 0, skipped = [];
+    try {
+      var sh = db_().getSheetByName('員工'), data = sh.getDataRange().getValues();
+      var idx = {};
+      for (var i = 1; i < data.length; i++) idx[String(data[i][0])] = i;
+      var add = [];
+      list.forEach(function (e) {
+        var empNo = String(e.empNo || '').trim(), pw = String(e.idNo || '').trim().toUpperCase();
+        if (!empNo || pw.length < 6) { skipped.push((e.name || '') + empNo); return; }
+        var salt = Utilities.getUuid(), h = hash_(pw, salt);
+        if (idx[empNo] != null) {
+          var i = idx[empNo], row = data[i];
+          sh.getRange(i + 1, 2, 1, 9).setValues([[row[1] || e.tcNo || '', row[2] || e.name || '', row[3] || e.category || '',
+            '', h, salt, '', row[8] === '停用' ? '停用' : '啟用', now_()]]);
+          updated++;
+        } else {
+          add.push([empNo, e.tcNo || '', e.name || '', e.category || '', '', h, salt, '', '啟用', now_()]);
+          idx[empNo] = -1; added++;
+        }
+      });
+      if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, add[0].length).setNumberFormat('@').setValues(add);
+    } finally { lock.releaseLock(); }
+    log_(s.id, '匯入員工資料', '新增 ' + added + '、更新 ' + updated + (skipped.length ? '、略過 ' + skipped.length : ''));
+    return { ok: true, added: added, updated: updated, skipped: skipped };
   },
 
   setEmployeeStatus: function (r) {

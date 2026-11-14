@@ -58,7 +58,7 @@
       return viewAdmin();
     }
     if (state.emp) {
-      if (state.emp.mustChange) return viewChangePw(false);
+      state.emp.mustChange = false;
       return viewEmployee();
     }
     return viewLogin();
@@ -74,7 +74,7 @@
       '<div class="muted small">員工查詢薪資單與出勤紀錄；管理員請用管理員帳號登入。</div>' +
       '<label class="field"><span>帳號（員工請填東慧員編或寶雅員編）</span><input name="id" required autocomplete="username" placeholder="例：152699 或 TC0428"></label>' +
       '<label class="field"><span>密碼</span><input name="pw" type="password" required autocomplete="current-password"></label>' +
-      '<div class="muted small">員工第一次登入請用人事提供的初始密碼（身分證字號），登入後會請你設定新密碼。</div>' +
+      '<div class="muted small">員工密碼為身分證字號（英文字母大小寫都可以）。</div>' +
       '<div id="lmsg"></div>' +
       '<button class="btn primary" style="width:100%;margin-top:10px;padding:11px">登入</button>' +
       '</form>' + footer();
@@ -117,10 +117,9 @@
   function viewEmployee() {
     var e = state.emp;
     $app.innerHTML = bar('<div class="who"><b>' + esc(e.name) + '</b>　' + esc(e.category || '') + '<br><span class="muted small">員編 ' + esc(e.empNo) + '</span></div>' +
-      '<button class="btn sm" id="bpw">改密碼</button><button class="btn sm" id="bout">登出</button>') +
+      '<button class="btn sm" id="bout">登出</button>') +
       '<div class="periods" id="plist"><span class="muted small">讀取中…</span></div><div id="pbody"></div>' + footer();
     document.getElementById('bout').onclick = function () { state.emp = null; store('emp', null); route(); };
-    document.getElementById('bpw').onclick = function () { viewChangePw(false, true); };
     api('myPeriods', { token: e.token }).then(function (j) {
       state.periods = j.periods;
       var pl = document.getElementById('plist');
@@ -372,7 +371,8 @@
       var cnt = { '未開通': 0, '待首次登入': 0, '已啟用': 0, '停用': 0 };
       list.forEach(function (e) { cnt[e.status]++; });
       body.innerHTML = '<div class="stats">' + Object.keys(cnt).map(function (k) { return '<div class="stat' + (k === '未開通' && cnt[k] ? ' hl' : '') + '"><div class="k">' + k + '</div><div class="v">' + cnt[k] + '<small>人</small></div></div>'; }).join('') + '</div>' +
-        '<div class="row" style="margin-bottom:10px"><input class="search" id="esearch" placeholder="搜尋姓名或員編"><span class="muted small">員工名單會在上傳附表時自動建立。「未開通」的人請設定初始密碼（身分證字號），也可以直接在試算表「員工」分頁的「初始密碼」欄整批貼上。</span></div>' +
+        '<div class="card"><b>匯入員工資料（日城）</b><div class="muted small" style="margin:4px 0 8px">選「員工資料日城.xlsx」：會建立寶雅長期與支援（PT）人員的帳號，密碼設為身分證字號，員工無法自行變更。離職人員會略過。檔案在你的瀏覽器裡讀取，試算表只存密碼雜湊，不存身分證字號。</div><input type="file" id="empfile" accept=".xlsx,.xls"><div id="empmsg"></div></div>' +
+        '<div class="row" style="margin-bottom:10px"><input class="search" id="esearch" placeholder="搜尋姓名或員編"><span class="muted small">員工密碼固定為身分證字號；換身分證或打錯時，按「重設密碼」重新輸入即可。</span></div>' +
         '<div class="tbl-wrap"><table><thead><tr><th>東慧員編</th><th>寶雅員編</th><th>姓名</th><th>類別</th><th>帳號狀態</th><th></th></tr></thead><tbody id="etb"></tbody></table></div>';
       var BC = { '未開通': 'red', '待首次登入': 'orange', '已啟用': 'green', '停用': '' };
       function draw(q) {
@@ -383,7 +383,7 @@
         document.querySelectorAll('[data-init]').forEach(function (b) {
           b.onclick = function () {
             var emp = b.dataset.init;
-            modal('<b>設定 ' + esc(emp) + ' 的初始密碼</b><div class="muted small">建議用身分證字號；員工第一次登入後會被要求改成自己的密碼，系統會同時清掉這個初始密碼。</div><label class="field"><span>初始密碼</span><input id="ip" autocomplete="off"></label><div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button><button class="btn primary" id="ipok">儲存</button></div>', function (m, close) {
+            modal('<b>設定 ' + esc(emp) + ' 的密碼</b><div class="muted small">請輸入身分證字號，員工之後都用這組密碼登入，無法自行變更。</div><label class="field"><span>密碼（身分證字號）</span><input id="ip" autocomplete="off"></label><div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button><button class="btn primary" id="ipok">儲存</button></div>', function (m, close) {
               m.querySelector('#ipok').onclick = function () {
                 api('setInitialPassword', { token: state.admin.token, empNo: emp, initial: m.querySelector('#ip').value }).then(function () { close(); adminEmps(body); }).catch(function (e) { alertMsg(e.message); });
               };
@@ -395,8 +395,53 @@
         });
       }
       draw('');
+      document.getElementById('empfile').onchange = function (ev) { if (ev.target.files[0]) importEmpFile(ev.target.files[0], body); };
       document.getElementById('esearch').oninput = function (e) { draw(e.target.value.trim()); };
     }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+
+  function importEmpFile(f, body) {
+    var msg = document.getElementById('empmsg');
+    var rd = new FileReader();
+    rd.onload = function () {
+      var list;
+      try {
+        var wb = XLSX.read(new Uint8Array(rd.result), { type: 'array' });
+        var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: false });
+        var h = rows[0].map(function (x) { return String(x).trim(); });
+        var c = { no: h.indexOf('員工代號'), name: h.indexOf('員工姓名'), id: h.indexOf('身份證字號') >= 0 ? h.indexOf('身份證字號') : h.indexOf('身分證字號'), org: h.indexOf('組織名稱'), kind: h.indexOf('身分別') };
+        if (c.no < 0 || c.id < 0 || c.org < 0) throw new Error('找不到「員工代號」「身份證字號」「組織名稱」欄位，請確認選的是員工資料日城.xlsx');
+        list = [];
+        rows.slice(1).forEach(function (r) {
+          var org = String(r[c.org]).trim(), kind = c.kind >= 0 ? String(r[c.kind]).trim() : '';
+          if (org.indexOf('寶雅') < 0 || kind === '離職') return;
+          var no = String(r[c.no]).trim(), id = String(r[c.id]).trim();
+          if (!no) return;
+          list.push({ empNo: no, name: String(r[c.name] || '').trim(), category: org.indexOf('支援') >= 0 ? 'PT' : '長期', idNo: id });
+        });
+        if (!list.length) throw new Error('檔案裡沒有寶雅的在職人員');
+      } catch (err) { msg.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; return; }
+      var noId = list.filter(function (e) { return e.idNo.length < 6; });
+      confirmBox('匯入寶雅人員 <b>' + list.length + '</b> 人（長期 ' + list.filter(function (e) { return e.category === '長期'; }).length + '、PT ' + list.filter(function (e) { return e.category === 'PT'; }).length + '），密碼設為身分證字號？' +
+        (noId.length ? '<br><span class="muted small">其中 ' + noId.length + ' 人沒有身分證字號，會略過：' + esc(noId.map(function (e) { return e.name; }).join('、')) + '</span>' : ''), '匯入').then(function (ok) {
+        if (!ok) return;
+        var chunks = [], i, tot = { added: 0, updated: 0, skipped: [] };
+        for (i = 0; i < list.length; i += 15) chunks.push(list.slice(i, i + 15));
+        var n = 0;
+        (function next() {
+          if (n >= chunks.length) {
+            msg.innerHTML = '<div class="msg ok">匯入完成：新增 ' + tot.added + ' 人、更新 ' + tot.updated + ' 人' + (tot.skipped.length ? '、略過 ' + tot.skipped.length + ' 人' : '') + '。</div>';
+            setTimeout(function () { adminEmps(body); }, 1500);
+            return;
+          }
+          msg.innerHTML = '<div class="muted small">匯入中… ' + (n * 15) + ' / ' + list.length + '</div>';
+          api('importEmployees', { token: state.admin.token, employees: chunks[n] }).then(function (j) {
+            tot.added += j.added; tot.updated += j.updated; tot.skipped = tot.skipped.concat(j.skipped || []); n++; next();
+          }).catch(function (err) { msg.innerHTML = '<div class="msg err">' + esc(err.message) + '（已完成 ' + (n * 15) + ' 人）</div>'; });
+        })();
+      });
+    };
+    rd.readAsArrayBuffer(f);
   }
 
   function adminLogs(body) {
