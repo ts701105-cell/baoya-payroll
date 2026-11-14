@@ -54,7 +54,7 @@
     var h = location.hash || '#/';
     state.emp = state.emp || load('emp');
     state.admin = state.admin || load('admin');
-    if (h.indexOf('#/admin') === 0) {
+    if (window.APP_MODE === 'admin') {
       if (!state.admin) return viewLogin(true);
       if (state.admin.mustChange) return viewChangePw(true);
       return viewAdmin();
@@ -76,7 +76,6 @@
       (isAdmin ? '' : '<div class="muted small">第一次登入請用人事提供的初始密碼（身分證字號），登入後會請你設定新密碼。</div>') +
       '<div id="lmsg"></div>' +
       '<button class="btn primary" style="width:100%;margin-top:10px;padding:11px">登入</button>' +
-      '<div style="text-align:center;margin-top:14px"><a class="small muted" href="' + (isAdmin ? '#/' : '#/admin') + '">' + (isAdmin ? '← 回員工登入' : '管理員登入') + '</a></div>' +
       '</form>' + footer();
     document.getElementById('lf').onsubmit = function (e) {
       e.preventDefault();

@@ -34,7 +34,7 @@
 4. 儲存庫 Settings → Pages → Branch 選 `main`、資料夾 `/ (root)` → Save。約 1～2 分鐘後就有網址。
 
 - 員工網址：`https://<帳號>.github.io/baoya-payroll/`
-- 管理員網址：`https://<帳號>.github.io/baoya-payroll/#/admin`（員工登入頁下方也有連結）
+- 管理員網址：`https://<帳號>.github.io/baoya-payroll/admin.html`（和員工網址分開，員工頁面上沒有管理員入口）
 
 ## 三、每月操作
 
