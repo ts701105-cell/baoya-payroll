@@ -875,10 +875,10 @@ function proofFolder_() {
   if (!folder) { folder = DriveApp.createFolder(APP.PROOF_FOLDER); props.setProperty('PROOF_FOLDER_ID', folder.getId()); }
   return folder;
 }
-/* 證明檔名：姓名-西元年月日-請假時段.jpg，例：李雅婷-20261102-0830-1230.jpg、李雅婷-20261102至20261104-整天.jpg */
-function proofName_(emp, start, end, st, en) {
+/* 證明檔名：姓名-假別-西元年月日-請假時段.jpg，例：李雅婷-病假-20261102-0830-1230.jpg、李雅婷-婚假-20261102至20261104-整天.jpg */
+function proofName_(emp, type, start, end, st, en) {
   var d = function (x) { return String(x).replace(/\//g, ''); };
-  return emp.name + '-' + d(start) + (end !== start ? '至' + d(end) : '') + '-' + (st === '整天' ? '整天' : String(st).replace(':', '') + '-' + String(en).replace(':', '')) + '.jpg';
+  return emp.name + '-' + type + '-' + d(start) + (end !== start ? '至' + d(end) : '') + '-' + (st === '整天' ? '整天' : String(st).replace(':', '') + '-' + String(en).replace(':', '')) + '.jpg';
 }
 function saveProof_(emp, name, proof) {
   if (!proof || !proof.data) return null;
@@ -914,7 +914,7 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
     var mine = info.applications.filter(function (a) { return a.status !== '已駁回' && a.status !== '已取消'; });
     days.forEach(function (d) { mine.forEach(function (a) { if (d >= a.start && d <= a.end) throw new Error(d + ' 已經有請假申請（' + a.type + '）'); }); });
     warn = checkQuota_(info, type, days, perDay) || '';
-    var pname = proofName_(emp, start, end, st, en);
+    var pname = proofName_(emp, type, start, end, st, en);
     var proof = saveProof_(emp, pname, r.proof);
     var oldProof = row ? { id: String(row.data[17] || ''), name: String(row.data[18] || '') } : { id: '', name: '' };
     var pf = proof || oldProof;
