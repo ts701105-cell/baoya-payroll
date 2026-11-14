@@ -598,7 +598,7 @@ function leaveRow_(x) {
     status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13] };
 }
 
-/* 彙整：已休 = 已上傳出勤紀錄裡的請假 ＋ 已核准、尚未出現在出勤紀錄的申請 ＋ 「請假調整」分頁的期初時數 */
+/* 彙整：已休 = 出勤明細的請假（優先）＋「請假調整」的逐日紀錄（同日同假別不重複）＋ 已核准、尚未出現在出勤紀錄的申請 */
 function leaveInfo_(emp) {
   var today = fmt_(new Date()), year = today.slice(0, 4);
   var used = {};   // key 'date|type' -> hours（出勤紀錄優先）
@@ -607,6 +607,14 @@ function leaveInfo_(emp) {
     if (String(dl[i][1]) !== emp.empNo || !dl[i][8] || !(+dl[i][9] > 0)) continue;
     used[normDate_(dl[i][2]) + '|' + String(dl[i][8]).trim()] = { hours: +dl[i][9], src: '出勤' };
   }
+  // 「請假調整」：有日期的逐日紀錄，同一天同假別若已在出勤明細就不重複計算
+  var adj = sheet_('請假調整').getDataRange().getValues().slice(1).filter(function (x) { return String(x[0]) === emp.empNo; });
+  adj.forEach(function (x, j) {
+    var d = normDate_(x[2]), ty = String(x[1]).trim(), k = d + '|' + ty;
+    if (!d || !(+x[3] > 0)) return;
+    if (!used[k]) used[k] = { hours: +x[3], src: '調整' };
+    else if (used[k].src === '調整') used[k + '|' + j] = { hours: +x[3], src: '調整' };  // 同日多筆調整都要算
+  });
   var apps = [], la = sheet_('請假').getDataRange().getValues();
   for (i = 1; i < la.length; i++) {
     if (String(la[i][1]) !== emp.empNo) continue;
@@ -618,7 +626,6 @@ function leaveInfo_(emp) {
     });
   }
   apps.sort(function (x, y) { return x.start < y.start ? 1 : -1; });
-  var adj = sheet_('請假調整').getDataRange().getValues().slice(1).filter(function (x) { return String(x[0]) === emp.empNo; });
 
   function sum(type, from, to) {
     var t = { used: 0, pending: 0 };
@@ -628,7 +635,6 @@ function leaveInfo_(emp) {
       if (!cnt || d < from || d > to) return;
       if (used[k].src === '審核中') t.pending += used[k].hours; else t.used += used[k].hours;
     });
-    adj.forEach(function (x) { var d = normDate_(x[2]); if (String(x[1]) === type && d >= from && d <= to) t.used += +x[3] || 0; });
     return t;
   }
   var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES) };
