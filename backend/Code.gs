@@ -18,7 +18,12 @@ var APP = {
   LEAVE_DAY_HOURS: 8,   // 請假額度換算：1 天 = 幾小時（寶雅特休計算表以 8 小時計）
   LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
   OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
-  OVERTIME_MONTH_LIMIT: 46     // 勞基法第 32 條：每月延長工時上限（超過只提醒）
+  OVERTIME_MONTH_LIMIT: 46,    // 勞基法第 32 條：每月延長工時上限（超過只提醒）
+  LEAVE_BREAKS: [['12:00', '13:00'], ['17:00', '17:30']],       // 早班不計薪休息時間，請假時數會自動扣除
+  LEAVE_BREAKS_NIGHT: [['00:00', '01:00'], ['05:00', '05:30']], // 夜班（跨午夜）不計薪休息時間（請確認）
+  PROOF_REQUIRED: ['病假'],     // 必須上傳證明的假別
+  NO_REASON: ['特休', '事假'],  // 不用填理由的假別
+  PROOF_FOLDER: '寶雅請假證明'   // 證明檔存放的雲端硬碟資料夾
 };
 
 /* 請假額度：特休依到職日（週年制），其他假別依曆年（1/1–12/31） */
@@ -46,7 +51,7 @@ var SHEETS = {
   特休: ['期間代碼', '東慧員編', '到職日', '年資', '累計已休', '剩餘特休'],
   管理員: ['帳號', '姓名', '密碼雜湊', '鹽', '需改密碼', '狀態'],
   紀錄: ['時間', '帳號', '動作', '說明'],
-  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒'],
+  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
   加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒']
 };
@@ -191,28 +196,17 @@ var ACTIONS = {
   applyLeave: function (r) {
     var s = auth_(r.token, 'emp');
     var emp = leaveEmp_(s.id);
-    var type = String(r.type || ''), start = normDate_(r.start), end = normDate_(r.end || r.start);
-    var perDay = Number(r.hoursPerDay), reason = String(r.reason || '').trim();
-    if (!LEAVE_TYPES[type]) throw new Error('請選擇假別');
-    if (!start || !end) throw new Error('請填請假日期');
-    if (end < start) throw new Error('結束日不能早於開始日');
-    if (!(perDay > 0 && perDay <= 10) || Math.round(perDay * 2) !== perDay * 2) throw new Error('每日時數請填 0.5～10 小時（以半小時為單位）');
-    var days = dateRange_(start, end);
-    if (days.length > 31) throw new Error('一次申請的日期範圍最多一個月');
-    var lock = LockService.getScriptLock(); lock.waitLock(30000);
-    try {
-      var info = leaveInfo_(emp);
-      var mine = info.applications.filter(function (a) { return a.status !== '已駁回' && a.status !== '已取消'; });
-      days.forEach(function (d) {
-        mine.forEach(function (a) { if (d >= a.start && d <= a.end) throw new Error(d + ' 已經有請假申請（' + a.type + '）'); });
-      });
-      var total = perDay * days.length;
-      var warn = checkQuota_(info, type, days, perDay) || '';
-      var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
-      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn]);
-    } finally { lock.releaseLock(); }
-    log_(emp.empNo, '申請請假', type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + total + 'h');
-    return { ok: true, data: leaveInfo_(emp), warning: warn };
+    var res = saveLeave_(emp, r, null, emp.empNo, false);
+    log_(emp.empNo, '申請請假', res.summary);
+    return { ok: true, data: leaveInfo_(emp), warning: res.warn };
+  },
+
+  updateLeave: function (r) {
+    var s = auth_(r.token, 'emp');
+    var emp = leaveEmp_(s.id);
+    var res = saveLeave_(emp, r, String(r.id), emp.empNo, false);
+    log_(emp.empNo, '修改請假', res.summary);
+    return { ok: true, data: leaveInfo_(emp), warning: res.warn };
   },
 
   cancelLeave: function (r) {
@@ -446,12 +440,21 @@ var ACTIONS = {
     var data = sheet_('請假').getDataRange().getValues(), out = [];
     for (var i = 1; i < data.length; i++) out.push(leaveRow_(data[i]));
     out.sort(function (a, b) { return (a.status === '審核中') !== (b.status === '審核中') ? (a.status === '審核中' ? -1 : 1) : (a.appliedAt < b.appliedAt ? 1 : -1); });
-    return { ok: true, leaves: out };
+    return { ok: true, leaves: out, types: Object.keys(LEAVE_TYPES), breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT) };
   },
 
   adminLeaveInfo: function (r) {
     auth_(r.token, 'admin');
     return { ok: true, data: leaveInfo_(leaveEmp_(String(r.empNo), true)) };
+  },
+
+  adminUpdateLeave: function (r) {
+    var s = auth_(r.token, 'admin');
+    var row = findLeave_(r.id);
+    var emp = leaveEmp_(row.data[1], true);
+    var res = saveLeave_(emp, r, String(r.id), s.id, true);
+    log_(s.id, '修改請假', emp.name + ' ' + res.summary);
+    return { ok: true, warning: res.warn };
   },
 
   reviewLeave: function (r) {
@@ -670,11 +673,12 @@ function leaveEmp_(empNo, adminView) {
 }
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
-    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13], warning: x[14] || '' };
+    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13], warning: x[14] || '',
+    startTime: String(x[15] || ''), endTime: String(x[16] || ''), proofId: String(x[17] || ''), proofName: String(x[18] || ''), edits: String(x[19] || '') };
 }
 
 /* 彙整：已休 = 出勤明細的請假（優先）＋「請假調整」的逐日紀錄（同日同假別不重複）＋ 已核准、尚未出現在出勤紀錄的申請 */
-function leaveInfo_(emp) {
+function leaveInfo_(emp, excludeId) {
   var today = fmt_(new Date()), year = today.slice(0, 4);
   var used = {};   // key 'date|type' -> hours（出勤紀錄優先）
   var dl = db_().getSheetByName('出勤明細').getDataRange().getValues();
@@ -693,7 +697,9 @@ function leaveInfo_(emp) {
   var apps = [], la = sheet_('請假').getDataRange().getValues();
   for (i = 1; i < la.length; i++) {
     if (String(la[i][1]) !== emp.empNo) continue;
-    var a = leaveRow_(la[i]); apps.push(a);
+    var a = leaveRow_(la[i]);
+    if (excludeId && a.id === excludeId) continue;
+    apps.push(a);
     if (a.status !== '已核准' && a.status !== '審核中') continue;
     dateRange_(a.start, a.end).forEach(function (d) {
       var k = d + '|' + a.type;
@@ -712,7 +718,8 @@ function leaveInfo_(emp) {
     });
     return t;
   }
-  var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES) };
+  var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
+    breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT), proofRequired: APP.PROOF_REQUIRED, noReason: APP.NO_REASON };
   if (emp.hire) {
     var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end);
     out.balances.push({ type: '特休', rule: '週年制（到職日 ' + emp.hire + '，' + w.label + '）', from: w.start, to: w.end, quota: w.days * H, used: t.used, pending: t.pending });
@@ -805,4 +812,90 @@ function otInfo_(empNo) {
   });
   return { list: list, kinds: OT_KINDS, limit: APP.OVERTIME_MONTH_LIMIT, today: fmt_(new Date()),
     months: Object.keys(months).sort().reverse().map(function (k) { return months[k]; }) };
+}
+
+
+/* ───────────── 請假：時間、證明、修改 ───────────── */
+function findLeave_(id) {
+  var sh = sheet_('請假'), data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) if (String(data[i][0]) === String(id)) return { sh: sh, i: i, data: data[i] };
+  throw new Error('找不到這筆申請');
+}
+function halfHour_(t) { var m = hm_(t); return m != null && m % 30 === 0 ? m : null; }
+/* 依起訖時間算出每日請假時數：扣除不計薪休息時間（早班 LEAVE_BREAKS、夜班 LEAVE_BREAKS_NIGHT） */
+function leaveHours_(st, en) {
+  var a = halfHour_(st), b = halfHour_(en);
+  if (a == null || b == null) throw new Error('請假時間請選整點或半點（例如 08:00、13:30）');
+  var night = b <= a;
+  if (night) b += 24 * 60;
+  var m = b - a;
+  // 早班與夜班的休息時段互不重疊，全部比對（含跨午夜的隔天時段）
+  APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT).forEach(function (br) {
+    [0, 24 * 60].forEach(function (off) {
+      var x = hm_(br[0]) + off, y = hm_(br[1]) + off;
+      m -= Math.max(0, Math.min(b, y) - Math.max(a, x));
+    });
+  });
+  var h = m / 60;
+  if (!(h > 0)) throw new Error('請假時數要大於 0（扣除休息時間後）');
+  if (h > 10) throw new Error('每日請假最多 10 小時');
+  return h;
+}
+function saveProof_(emp, id, proof) {
+  if (!proof || !proof.data) return null;
+  if (String(proof.data).length > 14000000) throw new Error('證明檔太大，請小於 10MB');
+  var props = PropertiesService.getScriptProperties(), fid = props.getProperty('PROOF_FOLDER_ID'), folder = null;
+  if (fid) { try { folder = DriveApp.getFolderById(fid); } catch (e) { folder = null; } }
+  if (!folder) { folder = DriveApp.createFolder(APP.PROOF_FOLDER); props.setProperty('PROOF_FOLDER_ID', folder.getId()); }
+  var ext = (String(proof.name || '').match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0];
+  var blob = Utilities.newBlob(Utilities.base64Decode(proof.data), proof.mime || 'application/octet-stream', id + '_' + emp.empNo + '_' + emp.name + ext);
+  var f = folder.createFile(blob);
+  return { id: f.getId(), name: String(proof.name || f.getName()) };
+}
+/* 新增或修改一筆請假；byAdmin 時可改已核准的申請 */
+function saveLeave_(emp, r, editId, actor, byAdmin) {
+  var type = String(r.type || ''), start = normDate_(r.start), end = normDate_(r.end || r.start);
+  var st = String(r.startTime || ''), en = String(r.endTime || ''), reason = String(r.reason || '').trim();
+  if (!LEAVE_TYPES[type]) throw new Error('請選擇假別');
+  if (!start || !end) throw new Error('請填請假日期');
+  if (end < start) throw new Error('結束日不能早於開始日');
+  var perDay = leaveHours_(st, en);
+  var days = dateRange_(start, end);
+  if (days.length > 31) throw new Error('一次申請的日期範圍最多一個月');
+  if (APP.NO_REASON.indexOf(type) >= 0) reason = '';
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  var warn = '', total = perDay * days.length, row = null;
+  try {
+    if (editId) {
+      row = findLeave_(editId);
+      if (String(row.data[1]) !== emp.empNo) throw new Error('找不到這筆申請');
+      var stt = row.data[9];
+      if (!byAdmin && stt !== '審核中') throw new Error('只有「審核中」的申請可以修改，已審核的請洽人事');
+      if (byAdmin && (stt === '已取消' || stt === '已駁回')) throw new Error('「' + stt + '」的申請不能修改');
+    }
+    var info = leaveInfo_(emp, editId);
+    var mine = info.applications.filter(function (a) { return a.status !== '已駁回' && a.status !== '已取消'; });
+    days.forEach(function (d) { mine.forEach(function (a) { if (d >= a.start && d <= a.end) throw new Error(d + ' 已經有請假申請（' + a.type + '）'); }); });
+    warn = checkQuota_(info, type, days, perDay) || '';
+    var proof = saveProof_(emp, editId || 'new', r.proof);
+    var oldProof = row ? { id: String(row.data[17] || ''), name: String(row.data[18] || '') } : { id: '', name: '' };
+    var pf = proof || oldProof;
+    if (APP.PROOF_REQUIRED.indexOf(type) >= 0 && !pf.id && !byAdmin) throw new Error(type + '需要上傳證明（照片或 PDF）');
+    if (row) {
+      var d0 = row.data, before = d0[3] + ' ' + normDate_(d0[4]) + (normDate_(d0[5]) !== normDate_(d0[4]) ? '～' + normDate_(d0[5]) : '') + ' ' + (d0[15] || '') + '–' + (d0[16] || '') + ' ' + d0[7] + 'h';
+      var hist = (d0[19] ? d0[19] + '\n' : '') + now_() + ' ' + actor + ' 修改（原：' + before + '）';
+      row.sh.getRange(row.i + 1, 4, 1, 6).setValues([[type, start, end, perDay, total, reason]]);
+      row.sh.getRange(row.i + 1, 15, 1, 6).setValues([[warn, st, en, pf.id, pf.name, hist]]);
+    } else {
+      var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
+      if (proof) { try { DriveApp.getFileById(proof.id).setName(id + '_' + emp.empNo + '_' + emp.name + (proof.name.match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0]); } catch (e) {} }
+      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn, st, en, pf.id, pf.name, '']);
+    }
+  } finally { lock.releaseLock(); }
+  return { warn: warn, summary: type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + st + '–' + en + ' ' + total + 'h' };
+}
+/* 第一次使用上傳證明前，在編輯器執行一次，授權存取雲端硬碟 */
+function authorizeDrive() {
+  var f = DriveApp.getRootFolder();
+  Logger.log('雲端硬碟授權完成：' + f.getName());
 }
