@@ -118,11 +118,12 @@
     var e = state.emp;
     $app.innerHTML = bar('<div class="who"><b>' + esc(e.name) + '</b>　' + esc(e.category || '') + '<br><span class="muted small">員編 ' + esc(e.empNo) + '</span></div>' +
       '<button class="btn sm" id="bout">登出</button>') +
-      (canLeave() ? '<div class="tabs">' + [['pay', '薪資・出勤'], ['leave', '請假']].map(function (t) { return '<button class="tab' + ((state.empMode || 'pay') === t[0] ? ' on' : '') + '" data-m="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>' : '') +
+      (empTabs().length > 1 ? '<div class="tabs">' + empTabs().map(function (t) { return '<button class="tab' + ((state.empMode || 'pay') === t[0] ? ' on' : '') + '" data-m="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>' : '') +
       '<div class="periods" id="plist"><span class="muted small">讀取中…</span></div><div id="pbody"></div>' + footer();
     document.getElementById('bout').onclick = function () { state.emp = null; state.empMode = 'pay'; store('emp', null); route(); };
     $app.querySelectorAll('[data-m]').forEach(function (b) { b.onclick = function () { state.empMode = b.dataset.m; viewEmployee(); }; });
     if (canLeave() && state.empMode === 'leave') { document.getElementById('plist').innerHTML = ''; return viewLeave(document.getElementById('pbody')); }
+    if (state.emp.overtime && state.empMode === 'ot') { document.getElementById('plist').innerHTML = ''; return viewOvertime(document.getElementById('pbody')); }
     api('myPeriods', { token: e.token }).then(function (j) {
       state.periods = j.periods;
       var pl = document.getElementById('plist');
@@ -136,6 +137,63 @@
   }
 
   function canLeave() { return state.emp && state.emp.category === '長期月薪'; }
+  function empTabs() { var t = [['pay', '薪資・出勤']]; if (canLeave()) t.push(['leave', '請假']); if (state.emp && state.emp.overtime) t.push(['ot', '報加班']); return t; }
+
+  /* ───────── 報加班 ───────── */
+  function otSplitHtml(sp) { return (sp || []).map(function (x) { return '<span class="pill">' + esc(x.label) + ' <b>' + x.hours + 'h</b></span>'; }).join(' '); }
+  function viewOvertime(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('myOvertime', { token: state.emp.token }).then(function (j) { renderOvertime(body, j.data); })
+      .catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+  function renderOvertime(body, d) {
+    var today = d.today.replace(/\//g, '-');
+    body.innerHTML = (d.months.length ? '<div class="stats">' + d.months.slice(0, 3).map(function (m) {
+        var tot = m.approved + m.pending;
+        return '<div class="stat' + (tot > d.limit ? ' hl' : '') + '"><div class="k">' + esc(m.month) + ' 加班</div><div class="v">' + tot + '<small>小時</small></div><div class="muted small">已核准 ' + m.approved + 'h' + (m.pending ? '・審核中 ' + m.pending + 'h' : '') + '・上限 ' + d.limit + 'h</div></div>';
+      }).join('') + '</div>' : '') +
+      '<form class="card" id="otf"><h2>報加班</h2><div class="row">' +
+      '<label class="field" style="margin:0;flex:1"><span>日期</span><input type="date" name="date" value="' + today + '" required></label>' +
+      '<label class="field" style="margin:0;flex:1"><span>類別</span><select name="kind">' + d.kinds.map(function (k) { return '<option>' + esc(k) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="field" style="margin:0;width:120px"><span>開始</span><input type="time" name="start" value="19:30" required></label>' +
+      '<label class="field" style="margin:0;width:120px"><span>結束</span><input type="time" name="end" value="21:30" required></label>' +
+      '<label class="field" style="margin:0;width:110px"><span>扣休息（小時）</span><input type="number" name="brk" value="0" min="0" max="4" step="0.5"></label></div>' +
+      '<div class="muted small" id="othint" style="margin-top:8px"></div>' +
+      '<label class="field"><span>加班事由</span><textarea name="reason" rows="2" required></textarea></label>' +
+      '<div id="otmsg"></div><div class="row" style="justify-content:flex-end"><button class="btn primary">送出</button></div></form>' +
+      '<h3 style="margin:18px 0 10px">我的加班紀錄</h3>' +
+      (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>時間</th><th>類別</th><th class="r">時數</th><th>倍率</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
+        d.list.map(function (x) {
+          return '<tr><td>' + esc(x.date) + '</td><td class="small">' + esc(x.start) + '–' + esc(x.end) + '</td><td>' + esc(x.kind) + '</td><td class="r">' + x.hours + '</td><td class="small">' + otSplitHtml(x.split) + '</td><td class="small">' + esc(x.reason) + (x.note ? '<br><span class="muted">人事：' + esc(x.note) + '</span>' : '') + '</td>' +
+            '<td><span class="badge ' + (ST[x.status] || '') + '">' + esc(x.status) + '</span></td><td>' + (x.status === '審核中' ? '<button class="btn sm" data-otc="' + esc(x.id) + '">取消</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : '<div class="empty">還沒有加班紀錄。</div>');
+    var f = document.getElementById('otf');
+    function calc() {
+      var a = f.start.value.split(':'), b = f.end.value.split(':'); if (a.length < 2 || b.length < 2) return 0;
+      var m = (+b[0] * 60 + +b[1]) - (+a[0] * 60 + +a[1]); if (m <= 0) m += 1440;
+      var h = Math.round(m / 30) / 2 - (Number(f.brk.value) || 0);
+      document.getElementById('othint').textContent = '加班時數：' + h + ' 小時' + (m <= 0 ? '' : '');
+      return h;
+    }
+    ['change', 'input'].forEach(function (ev) { f.addEventListener(ev, calc); }); calc();
+    f.onsubmit = function (e) {
+      e.preventDefault();
+      var h = calc();
+      confirmBox('報加班 <b>' + esc(f.date.value) + '（' + esc(f.kind.value) + '）</b> ' + esc(f.start.value) + '–' + esc(f.end.value) + '，共 <b>' + h + ' 小時</b>？', '送出').then(function (ok) {
+        if (!ok) return;
+        api('applyOvertime', { token: state.emp.token, date: f.date.value, kind: f.kind.value, start: f.start.value, end: f.end.value, breakHours: Number(f.brk.value) || 0, reason: f.reason.value })
+          .then(function (j) { renderOvertime(body, j.data); modal('<div class="msg ok">已送出，等候人事審核。</div>' + (j.warning ? '<div class="msg warn">' + esc(j.warning) + '</div>' : '') + '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
+          .catch(function (err) { document.getElementById('otmsg').innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; });
+      });
+    };
+    body.querySelectorAll('[data-otc]').forEach(function (b) {
+      b.onclick = function () {
+        confirmBox('取消這筆加班申請？', '取消申請', true).then(function (ok) {
+          if (ok) api('cancelOvertime', { token: state.emp.token, id: b.dataset.otc }).then(function (j) { renderOvertime(body, j.data); }).catch(function (e) { alertMsg(e.message); });
+        });
+      };
+    });
+  }
 
   /* ───────── 請假（長期月薪） ───────── */
   function hh(h, H) { h = Math.round((Number(h) || 0) * 10) / 10; var d = H ? Math.round(h / H * 100) / 100 : 0; return h + ' 小時' + (H ? '<span class="muted small">（' + d + ' 天）</span>' : ''); }
@@ -295,14 +353,14 @@
   /* ───────── 管理員 ───────── */
   function viewAdmin() {
     var a = state.admin;
-    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
+    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['ots', '加班審核'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
     $app.innerHTML = bar('<div class="who"><b>' + esc(a.name || '管理員') + '</b><br><span class="muted small">管理後台</span></div><button class="btn sm" id="apw">改密碼</button><button class="btn sm" id="aout">登出</button>') +
       '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (state.adminTab === t[0] ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div><div id="abody"></div>';
     document.getElementById('aout').onclick = function () { state.admin = null; store('admin', null); route(); };
     document.getElementById('apw').onclick = function () { viewChangePw(true, true); };
     $app.querySelectorAll('.tab').forEach(function (b) { b.onclick = function () { state.adminTab = b.dataset.t; viewAdmin(); }; });
     var body = document.getElementById('abody');
-    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
+    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, ots: adminOvertimes, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
   }
 
   function adminUpload(body) {
@@ -535,6 +593,38 @@
           '<label class="field"><span>備註（選填，員工看得到）</span><input id="rvnote" autocomplete="off"></label><div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button><button class="btn ' + (approve ? 'primary' : 'danger') + '" id="rvok">確定</button></div>', function (m, close) {
           m.querySelector('#rvok').onclick = function () {
             api('reviewLeave', { token: state.admin.token, id: id, approve: approve, note: m.querySelector('#rvnote').value }).then(function () { close(); adminLeaves(body); }).catch(function (e) { alertMsg(e.message); });
+          };
+        });
+      }
+      body.querySelectorAll('[data-ok]').forEach(function (b) { b.onclick = function () { review(b.dataset.ok, true); }; });
+      body.querySelectorAll('[data-no]').forEach(function (b) { b.onclick = function () { review(b.dataset.no, false); }; });
+    }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+
+  function adminOvertimes(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('adminOvertimes', { token: state.admin.token }).then(function (j) {
+      var all = j.list, flt = state.otFilter || '審核中';
+      var pend = all.filter(function (a) { return a.status === '審核中'; }).length;
+      var list = flt === '全部' ? all : all.filter(function (a) { return a.status === flt; });
+      body.innerHTML = '<div class="row" style="margin-bottom:12px">' + ['審核中', '已核准', '已駁回', '全部'].map(function (k) {
+          return '<button class="chip' + (flt === k ? ' on' : '') + '" data-f="' + k + '">' + k + (k === '審核中' && pend ? '（' + pend + '）' : '') + '</button>'; }).join('') +
+        '<span class="muted small">倍率依勞基法第 24 條拆分，計薪時參考。每月加班超過 46 小時會標示提醒。</span></div>' +
+        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>姓名</th><th>時間</th><th>類別</th><th class="r">時數</th><th>倍率</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
+          list.map(function (a) {
+            return '<tr><td>' + esc(a.date) + '<br><span class="muted small">申請 ' + esc(a.appliedAt) + '</span></td><td>' + esc(a.name) + '<br><span class="muted small">' + esc(a.empNo) + '</span></td><td class="small">' + esc(a.start) + '–' + esc(a.end) + '</td><td>' + esc(a.kind) + '</td><td class="r">' + a.hours + '</td>' +
+              '<td class="small">' + otSplitHtml(a.split) + '</td><td class="small">' + esc(a.reason) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + '</td>' +
+              '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.warning ? '<div class="small" style="color:var(--bad);max-width:220px">⚠ ' + esc(a.warning) + '</div>' : '') + (a.reviewer ? '<br><span class="muted small">' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</td>' +
+              '<td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' ? '<button class="btn sm primary" data-ok="' + esc(a.id) + '">核准</button><button class="btn sm danger" data-no="' + esc(a.id) + '">駁回</button>' :
+                a.status === '已核准' ? '<button class="btn sm" data-no="' + esc(a.id) + '">撤銷</button>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' : '<div class="empty">沒有' + (flt === '全部' ? '' : '「' + flt + '」的') + '加班申請。</div>');
+      body.querySelectorAll('[data-f]').forEach(function (b) { b.onclick = function () { state.otFilter = b.dataset.f; adminOvertimes(body); }; });
+      function review(id, approve) {
+        var a = all.filter(function (x) { return x.id === id; })[0];
+        modal('<b>' + (approve ? '核准' : (a.status === '已核准' ? '撤銷' : '駁回')) + '：' + esc(a.name) + ' ' + esc(a.date) + ' ' + esc(a.kind) + ' 加班 ' + a.hours + ' 小時</b>' +
+          '<label class="field"><span>備註（選填，員工看得到）</span><input id="rvnote" autocomplete="off"></label><div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button><button class="btn ' + (approve ? 'primary' : 'danger') + '" id="rvok">確定</button></div>', function (m, close) {
+          m.querySelector('#rvok').onclick = function () {
+            api('reviewOvertime', { token: state.admin.token, id: id, approve: approve, note: m.querySelector('#rvnote').value }).then(function () { close(); adminOvertimes(body); }).catch(function (e) { alertMsg(e.message); });
           };
         });
       }

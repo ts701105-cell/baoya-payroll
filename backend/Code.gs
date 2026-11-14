@@ -16,7 +16,9 @@ var APP = {
   LOCK_MINUTES: 15,
   FIXED_PASSWORD: true, // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
   LEAVE_DAY_HOURS: 8,   // 請假額度換算：1 天 = 幾小時（寶雅特休計算表以 8 小時計）
-  LEAVE_CATEGORY: '長期月薪' // 只有這個類別的員工可以使用請假功能
+  LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
+  OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
+  OVERTIME_MONTH_LIMIT: 46     // 勞基法第 32 條：每月延長工時上限（超過只提醒）
 };
 
 /* 請假額度：特休依到職日（週年制），其他假別依曆年（1/1–12/31） */
@@ -45,7 +47,8 @@ var SHEETS = {
   管理員: ['帳號', '姓名', '密碼雜湊', '鹽', '需改密碼', '狀態'],
   紀錄: ['時間', '帳號', '動作', '說明'],
   請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒'],
-  請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明']
+  請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
+  加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
 
@@ -127,7 +130,7 @@ var ACTIONS = {
       var mustChange = APP.FIXED_PASSWORD ? false : (!row[5] || row[7] === 'Y');
       var token = issueToken_({ role: 'emp', id: String(row[0]) });
       log_(String(row[0]), '登入', '');
-      return { ok: true, token: token, name: row[2], empNo: String(row[0]), category: row[3], mustChange: mustChange };
+      return { ok: true, token: token, name: row[2], empNo: String(row[0]), category: row[3], mustChange: mustChange, overtime: APP.OVERTIME_EMP.indexOf(String(row[0])) >= 0 };
     }
     fail_('emp:' + id);
     throw new Error('員編或密碼錯誤');
@@ -221,6 +224,54 @@ var ACTIONS = {
       sh.getRange(i + 1, 10).setValue('已取消');
       log_(s.id, '取消請假', r.id);
       return { ok: true, data: leaveInfo_(leaveEmp_(s.id)) };
+    }
+    throw new Error('找不到這筆申請');
+  },
+
+  /* 報加班 */
+  myOvertime: function (r) {
+    var s = auth_(r.token, 'emp');
+    otAllowed_(s.id);
+    return { ok: true, data: otInfo_(s.id) };
+  },
+
+  applyOvertime: function (r) {
+    var s = auth_(r.token, 'emp');
+    var emp = otAllowed_(s.id);
+    var date = normDate_(r.date), st = String(r.start || ''), en = String(r.end || ''), kind = String(r.kind || '平日');
+    var reason = String(r.reason || '').trim();
+    if (!date) throw new Error('請填加班日期');
+    if (OT_KINDS.indexOf(kind) < 0) throw new Error('請選擇加班類別');
+    var a = hm_(st), b = hm_(en);
+    if (a == null || b == null) throw new Error('請填開始與結束時間');
+    if (b <= a) b += 24 * 60; // 跨午夜
+    var hours = Math.round((b - a) / 30) / 2 - (Number(r.breakHours) || 0);
+    if (!(hours > 0)) throw new Error('加班時數要大於 0');
+    if (hours > 12) throw new Error('單日加班不可超過 12 小時');
+    if (!reason) throw new Error('請填寫加班事由');
+    var lock = LockService.getScriptLock(); lock.waitLock(30000);
+    var warn = '';
+    try {
+      var info = otInfo_(s.id);
+      info.list.forEach(function (x) { if (x.date === date && (x.status === '審核中' || x.status === '已核准')) throw new Error(date + ' 已經有加班申請'); });
+      var ym = date.slice(0, 7), month = info.list.filter(function (x) { return x.date.slice(0, 7) === ym && (x.status === '審核中' || x.status === '已核准'); }).reduce(function (t, x) { return t + x.hours; }, 0);
+      if (month + hours > APP.OVERTIME_MONTH_LIMIT) warn = ym + ' 加班累計 ' + (month + hours) + ' 小時，超過每月 ' + APP.OVERTIME_MONTH_LIMIT + ' 小時上限（仍可送出，由人事審核決定）';
+      var id = 'O' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
+      sheet_('加班').appendRow([id, emp.empNo, emp.name, date, st, en, hours, kind, reason, '審核中', now_(), '', '', '', warn]);
+    } finally { lock.releaseLock(); }
+    log_(emp.empNo, '申請加班', kind + ' ' + date + ' ' + hours + 'h');
+    return { ok: true, data: otInfo_(s.id), warning: warn };
+  },
+
+  cancelOvertime: function (r) {
+    var s = auth_(r.token, 'emp');
+    var sh = sheet_('加班'), data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]) !== String(r.id) || String(data[i][1]) !== s.id) continue;
+      if (data[i][9] !== '審核中') throw new Error('只有「審核中」的申請可以取消');
+      sh.getRange(i + 1, 10).setValue('已取消');
+      log_(s.id, '取消加班', r.id);
+      return { ok: true, data: otInfo_(s.id) };
     }
     throw new Error('找不到這筆申請');
   },
@@ -413,6 +464,28 @@ var ACTIONS = {
       sh.getRange(i + 1, 10).setValue(st);
       sh.getRange(i + 1, 12, 1, 3).setValues([[s.id, now_(), String(r.note || '')]]);
       log_(s.id, r.approve ? '核准請假' : '駁回請假', data[i][2] + ' ' + data[i][3] + ' ' + data[i][4]);
+      return { ok: true };
+    }
+    throw new Error('找不到這筆申請');
+  },
+
+  adminOvertimes: function (r) {
+    auth_(r.token, 'admin');
+    var data = sheet_('加班').getDataRange().getValues(), out = [];
+    for (var i = 1; i < data.length; i++) out.push(otRow_(data[i]));
+    out.sort(function (a, b) { return (a.status === '審核中') !== (b.status === '審核中') ? (a.status === '審核中' ? -1 : 1) : (a.date < b.date ? 1 : -1); });
+    return { ok: true, list: out };
+  },
+
+  reviewOvertime: function (r) {
+    var s = auth_(r.token, 'admin');
+    var sh = sheet_('加班'), data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]) !== String(r.id)) continue;
+      if (data[i][9] !== '審核中' && !(r.approve === false && data[i][9] === '已核准')) throw new Error('這筆申請已經是「' + data[i][9] + '」');
+      sh.getRange(i + 1, 10).setValue(r.approve ? '已核准' : '已駁回');
+      sh.getRange(i + 1, 12, 1, 3).setValues([[s.id, now_(), String(r.note || '')]]);
+      log_(s.id, r.approve ? '核准加班' : '駁回加班', data[i][2] + ' ' + normDate_(data[i][3]) + ' ' + data[i][6] + 'h');
       return { ok: true };
     }
     throw new Error('找不到這筆申請');
@@ -697,4 +770,39 @@ function checkQuota_(info, type, days, perDay) {
     if (own + need > c.days * H) warns.push(type + '一年最多 ' + c.days + ' 天，本次已超過（仍可送出，由人事審核決定）');
   }
   return warns.join('；');
+}
+
+
+/* ───────────── 報加班 ───────────── */
+var OT_KINDS = ['平日', '休息日', '國定假日', '例假日'];
+function hm_(t) { var m = String(t).match(/^(\d{1,2}):(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; }
+function otAllowed_(empNo) {
+  if (APP.OVERTIME_EMP.indexOf(String(empNo)) < 0) throw new Error('你的帳號沒有開放線上報加班，請洽人事');
+  var row = findEmp_(empNo).row;
+  return { empNo: String(row[0]), name: row[2] };
+}
+/* 依勞基法第 24 條拆分加班時數的倍率 */
+function otSplit_(h, kind) {
+  function seg(a, b, label) { var x = Math.max(0, Math.min(h, b) - a); return x > 0 ? [{ label: label, hours: x }] : []; }
+  if (kind === '平日') return seg(0, 2, '前 2 小時 ×1.34').concat(seg(2, 12, '第 3 小時起 ×1.67'));
+  if (kind === '休息日') return seg(0, 2, '1–2 小時 ×1.34').concat(seg(2, 8, '3–8 小時 ×1.67')).concat(seg(8, 12, '9–12 小時 ×2.67'));
+  return seg(0, 8, '8 小時內 加倍發給').concat(seg(8, 10, '第 9–10 小時 ×1.34')).concat(seg(10, 12, '第 11–12 小時 ×1.67'));
+}
+function otRow_(x) {
+  var h = +x[6], k = String(x[7]);
+  return { id: String(x[0]), empNo: String(x[1]), name: x[2], date: normDate_(x[3]), start: String(x[4]), end: String(x[5]), hours: h, kind: k, reason: x[8],
+    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13], warning: x[14] || '', split: otSplit_(h, k) };
+}
+function otInfo_(empNo) {
+  var data = sheet_('加班').getDataRange().getValues(), list = [];
+  for (var i = 1; i < data.length; i++) if (String(data[i][1]) === String(empNo)) list.push(otRow_(data[i]));
+  list.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  var months = {};
+  list.forEach(function (x) {
+    if (x.status !== '已核准' && x.status !== '審核中') return;
+    var m = months[x.date.slice(0, 7)] = months[x.date.slice(0, 7)] || { month: x.date.slice(0, 7), approved: 0, pending: 0 };
+    if (x.status === '已核准') m.approved += x.hours; else m.pending += x.hours;
+  });
+  return { list: list, kinds: OT_KINDS, limit: APP.OVERTIME_MONTH_LIMIT, today: fmt_(new Date()),
+    months: Object.keys(months).sort().reverse().map(function (k) { return months[k]; }) };
 }
