@@ -320,7 +320,7 @@
     if (d.daily && d.daily.length) {
       var days = d.daily.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
       var work = days.filter(function (x) { return Number(x.hours) > 0; }).length;
-      html += '<div class="muted small" style="margin-bottom:8px">出勤 ' + work + ' 天，共 ' + days.length + ' 筆紀錄</div>';
+      html += '<div class="muted small" style="margin-bottom:8px">出勤 ' + work + ' 筆，共 ' + days.length + ' 筆紀錄</div>';
       html += '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>班別</th><th>上班</th><th>下班</th><th class="r">工時</th><th>加班</th><th>請假</th><th class="r">夜班津貼</th></tr></thead><tbody>' +
         days.map(function (x) {
           var dt = new Date(String(x.date).replace(/\//g, '-') + 'T00:00:00');
