@@ -44,7 +44,7 @@ var SHEETS = {
   特休: ['期間代碼', '東慧員編', '到職日', '年資', '累計已休', '剩餘特休'],
   管理員: ['帳號', '姓名', '密碼雜湊', '鹽', '需改密碼', '狀態'],
   紀錄: ['時間', '帳號', '動作', '說明'],
-  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註'],
+  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
@@ -206,7 +206,7 @@ var ACTIONS = {
       var total = perDay * days.length;
       var warn = checkQuota_(info, type, days, perDay) || '';
       var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
-      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '']);
+      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn]);
     } finally { lock.releaseLock(); }
     log_(emp.empNo, '申請請假', type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + total + 'h');
     return { ok: true, data: leaveInfo_(emp), warning: warn };
@@ -549,6 +549,8 @@ function sheet_(name) {
     sh.getRange(1, 1, 1, SHEETS[name].length).setValues([SHEETS[name]]).setFontWeight('bold');
     sh.setFrozenRows(1);
     sh.getRange('A:Z').setNumberFormat('@');
+  } else if (sh.getLastColumn() < SHEETS[name].length) {
+    sh.getRange(1, 1, 1, SHEETS[name].length).setValues([SHEETS[name]]).setFontWeight('bold'); // 新增欄位時補上表頭
   }
   return sh;
 }
@@ -595,7 +597,7 @@ function leaveEmp_(empNo, adminView) {
 }
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
-    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13] };
+    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13], warning: x[14] || '' };
 }
 
 /* 彙整：已休 = 出勤明細的請假（優先）＋「請假調整」的逐日紀錄（同日同假別不重複）＋ 已核准、尚未出現在出勤紀錄的申請 */
@@ -684,10 +686,15 @@ function checkQuota_(info, type, days, perDay) {
     if (over) return '今年不併入病假的 3 日已用完，這次有 ' + over + ' 小時會併入病假計算';
     return '';
   }
-  if (b && b.quota != null && b.used + b.pending + need > b.quota)
-    throw new Error(base + '剩餘 ' + Math.max(0, b.quota - b.used - b.pending) + ' 小時，不足本次申請的 ' + need + ' 小時');
+  var warns = [];
+  if (b && b.quota != null && b.used + b.pending + need > b.quota) {
+    var msg = base + '剩餘 ' + Math.max(0, b.quota - b.used - b.pending) + ' 小時，本次申請 ' + need + ' 小時，已超過全年 ' + (b.quota / H) + ' 天額度';
+    if (type === '特休') throw new Error(msg);
+    warns.push(msg + '（仍可送出，由人事審核決定）');
+  }
   if (c.countsAs && c.days) {
     var own = info.applications.filter(function (a) { return a.type === type && a.status !== '已駁回' && a.status !== '已取消'; }).reduce(function (x, a) { return x + a.hours; }, 0);
-    if (own + need > c.days * H) throw new Error(type + '一年最多 ' + c.days + ' 天');
+    if (own + need > c.days * H) warns.push(type + '一年最多 ' + c.days + ' 天，本次已超過（仍可送出，由人事審核決定）');
   }
+  return warns.join('；');
 }
