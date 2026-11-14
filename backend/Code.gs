@@ -19,8 +19,9 @@ var APP = {
   LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
   OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
   OVERTIME_MONTH_LIMIT: 46,    // 勞基法第 32 條：每月延長工時上限（超過只提醒）
-  LEAVE_BREAKS: [['12:00', '13:00'], ['17:00', '17:30']],       // 早班不計薪休息時間，請假時數會自動扣除
-  LEAVE_BREAKS_NIGHT: [['00:00', '01:00'], ['05:00', '05:30']], // 夜班（跨午夜）不計薪休息時間（請確認）
+  LEAVE_BREAKS: [],         // 請假時數 = 結束 − 開始，不扣午休與休息（要扣時填入時段，例 [['12:00','13:00']]）
+  LEAVE_BREAKS_NIGHT: [],
+  LEAVE_MAX_DAY_HOURS: 12,  // 每日請假最多時數
   PROOF_REQUIRED: ['病假'],     // 必須上傳證明的假別
   NO_REASON: ['特休', '事假'],  // 不用填理由的假別
   PROOF_FOLDER: '寶雅請假證明'   // 證明檔存放的雲端硬碟資料夾
@@ -822,7 +823,7 @@ function findLeave_(id) {
   throw new Error('找不到這筆申請');
 }
 function halfHour_(t) { var m = hm_(t); return m != null && m % 30 === 0 ? m : null; }
-/* 依起訖時間算出每日請假時數：扣除不計薪休息時間（早班 LEAVE_BREAKS、夜班 LEAVE_BREAKS_NIGHT） */
+/* 依起訖時間算出每日請假時數，以半小時為單位（例 08:30–09:00 = 0.5 小時）；跨午夜視為隔天結束 */
 function leaveHours_(st, en) {
   var a = halfHour_(st), b = halfHour_(en);
   if (a == null || b == null) throw new Error('請假時間請選整點或半點（例如 08:00、13:30）');
@@ -837,8 +838,8 @@ function leaveHours_(st, en) {
     });
   });
   var h = m / 60;
-  if (!(h > 0)) throw new Error('請假時數要大於 0（扣除休息時間後）');
-  if (h > 10) throw new Error('每日請假最多 10 小時');
+  if (!(h > 0)) throw new Error('結束時間要晚於開始時間');
+  if (h > APP.LEAVE_MAX_DAY_HOURS) throw new Error('每日請假最多 ' + APP.LEAVE_MAX_DAY_HOURS + ' 小時');
   return h;
 }
 function saveProof_(emp, id, proof) {

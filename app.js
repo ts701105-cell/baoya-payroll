@@ -249,7 +249,7 @@
   function renderLeave(body, d, editing) {
     var today = d.today.replace(/\//g, '-'), ed = editing || null;
     var v = ed ? { type: ed.type, start: ed.start.replace(/\//g, '-'), end: ed.end.replace(/\//g, '-'), st: ed.startTime || '08:00', en: ed.endTime || '17:00', reason: ed.reason || '' }
-               : { type: d.types[0], start: today, end: today, st: '08:00', en: '17:00', reason: '' };
+               : { type: d.types[0], start: today, end: today, st: '08:00', en: '16:00', reason: '' };
     body.innerHTML = '<h3 style="margin:4px 0 10px">我的假別額度</h3>' + balancesHtml(d) +
       '<form class="card" id="lvf"><h2>' + (ed ? '修改請假申請' : '申請請假') + '</h2><div class="row">' +
       '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { return '<option' + (t === v.type ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
@@ -277,7 +277,7 @@
       var needProof = d.proofRequired.indexOf(t) >= 0;
       document.getElementById('lvproof').style.display = needProof ? '' : 'none';
       document.getElementById('lvproof').querySelector('span').firstChild.nodeValue = needProof ? '證明（照片或 PDF，必附）' : '證明';
-      document.getElementById('lvhrs').innerHTML = h > 0 ? '扣除休息後每日 <b>' + h + '</b> 小時' + (days() > 1 ? '，' + days() + ' 個日期合計 <b>' + (h * days()) + '</b> 小時' : '') : '<span style="color:var(--bad)">時間不正確</span>';
+      document.getElementById('lvhrs').innerHTML = h > 0 ? '每日 <b>' + h + '</b> 小時' + (days() > 1 ? '，' + days() + ' 個日期合計 <b>' + (h * days()) + '</b> 小時' : '') : '<span style="color:var(--bad)">時間不正確</span>';
       return h;
     }
     f.addEventListener('change', refresh); refresh();
