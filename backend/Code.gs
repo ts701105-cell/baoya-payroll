@@ -733,7 +733,7 @@ function leaveInfo_(emp, excludeId) {
       if (carry) {
         cEnd = prevDay_(addYM_(w.start, 0, APP.ANNUAL_DEFER_MONTHS));
         var dt = sum('特休', w.start, cEnd); dU = dt.used + dt.pending;
-        if (today <= cEnd) { quota = base + carry; rule += '；含上期遞延 ' + carry + ' 小時，須在 ' + cEnd + ' 前休完'; }
+        if (today <= cEnd) { quota = base + carry; rule += '；含上期遞延 ' + carry + ' 小時，使用期限至 ' + cEnd; }
         else { var useC = Math.min(carry, dU); quota = base + useC; expired = carry - useC;
                rule += '；上期遞延 ' + carry + ' 小時已於 ' + cEnd + ' 到期' + (expired ? '，未休 ' + expired + ' 小時應折發工資' : '（已休完）'); }
       }
