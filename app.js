@@ -51,35 +51,37 @@
 
   /* ───────── 路由 ───────── */
   function route() {
-    var h = location.hash || '#/';
     state.emp = state.emp || load('emp');
     state.admin = state.admin || load('admin');
-    if (window.APP_MODE === 'admin') {
-      if (!state.admin) return viewLogin(true);
+    if (state.admin) {
       if (state.admin.mustChange) return viewChangePw(true);
       return viewAdmin();
     }
-    if (!state.emp) return viewLogin(false);
-    if (state.emp.mustChange) return viewChangePw(false);
-    return viewEmployee();
+    if (state.emp) {
+      if (state.emp.mustChange) return viewChangePw(false);
+      return viewEmployee();
+    }
+    return viewLogin();
   }
   window.addEventListener('hashchange', route);
 
-  /* ───────── 登入 ───────── */
-  function viewLogin(isAdmin) {
+  /* ───────── 登入（員工與管理員共用同一個網址） ───────── */
+  function isEmpId(id) { return /^(TC\d+|\d{5,7})$/i.test(String(id).trim()); }
+  function viewLogin() {
     $app.innerHTML = bar('') +
       '<form class="login" id="lf" autocomplete="on">' +
-      '<h1>' + (isAdmin ? '管理員登入' : '員工登入') + '</h1>' +
-      '<div class="muted small">' + (isAdmin ? '上傳附表、發布月份、管理帳號' : '查詢自己的薪資單與出勤紀錄') + '</div>' +
-      '<label class="field"><span>' + (isAdmin ? '帳號' : '員工編號（東慧員編或寶雅員編）') + '</span><input name="id" required autocomplete="username" ' + (isAdmin ? '' : 'placeholder="例：152699 或 TC0428"') + '></label>' +
+      '<h1>登入</h1>' +
+      '<div class="muted small">員工查詢薪資單與出勤紀錄；管理員請用管理員帳號登入。</div>' +
+      '<label class="field"><span>帳號（員工請填東慧員編或寶雅員編）</span><input name="id" required autocomplete="username" placeholder="例：152699 或 TC0428"></label>' +
       '<label class="field"><span>密碼</span><input name="pw" type="password" required autocomplete="current-password"></label>' +
-      (isAdmin ? '' : '<div class="muted small">第一次登入請用人事提供的初始密碼（身分證字號），登入後會請你設定新密碼。</div>') +
+      '<div class="muted small">員工第一次登入請用人事提供的初始密碼（身分證字號），登入後會請你設定新密碼。</div>' +
       '<div id="lmsg"></div>' +
       '<button class="btn primary" style="width:100%;margin-top:10px;padding:11px">登入</button>' +
       '</form>' + footer();
     document.getElementById('lf').onsubmit = function (e) {
       e.preventDefault();
       var f = e.target, msg = document.getElementById('lmsg');
+      var isAdmin = !isEmpId(f.id.value);
       msg.innerHTML = '';
       api(isAdmin ? 'adminLogin' : 'login', { id: f.id.value, password: f.pw.value }).then(function (j) {
         if (isAdmin) { state.admin = j; store('admin', j); } else { state.emp = j; store('emp', j); }
