@@ -15,7 +15,7 @@ var APP = {
   MAX_FAIL: 5,          // 連續輸錯幾次後鎖定
   LOCK_MINUTES: 15,
   FIXED_PASSWORD: true, // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
-  LEAVE_DAY_HOURS: 8,   // 請假額度換算：1 天 = 幾小時（寶雅特休計算表以 8 小時計）
+  LEAVE_DAY_HOURS: 8,   // （已改用 WORKDAY_HOURS / WORKDAY_HOURS_BY_EMP 換算額度，保留供參考）
   LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
   OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
   OVERTIME_MONTH_LIMIT: 46,    // 勞基法第 32 條：每月延長工時上限（超過只提醒）
@@ -721,7 +721,7 @@ function leaveInfo_(emp, excludeId) {
     });
     return t;
   }
-  var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
+  var H = workdayHours_(emp.empNo), out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
     breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT), proofRequired: APP.PROOF_REQUIRED, noReason: APP.NO_REASON, workday: workdayHours_(emp.empNo) };
   if (emp.hire) {
     var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end);
