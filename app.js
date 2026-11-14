@@ -221,6 +221,7 @@
     (breaks || []).forEach(function (br) { [0, 1440].forEach(function (off) { var x = tmin(br[0]) + off, y = tmin(br[1]) + off; m -= Math.max(0, Math.min(b, y) - Math.max(a, x)); }); });
     return m / 60;
   }
+  function editLog(a) { return a.edits ? '<details class="small muted" style="margin-top:4px"><summary>異動紀錄（' + a.edits.split('\n').length + '）</summary>' + a.edits.split('\n').map(function (l) { return '<div>' + esc(l.replace(/(\d{2}:\d{2}):\d{2}/, '$1')) + '</div>'; }).join('') + '</details>' : ''; }
   function tl(a) { return a.startTime === '整天' ? '整天' : (a.startTime ? esc(a.startTime) + '–' + esc(a.endTime) : ''); }
   function timeSelect(name, val) { return '<select name="' + name + '">' + TIMES.map(function (t) { return '<option' + (t === val ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select>'; }
   function readProof(file) {
@@ -280,11 +281,11 @@
       '<label class="field" id="lvproof"><span>證明（照片或 PDF）' + (ed && ed.proofName ? '　<span class="muted">已上傳：' + esc(ed.proofName) + '，要更換再選檔</span>' : '') + '</span><input type="file" name="proof" accept="image/*,.pdf"></label>' +
       '<div id="lvmsg"></div><div class="row" style="justify-content:flex-end">' + (ed ? '<button type="button" class="btn" id="lvcancel">取消修改</button>' : '') + '<button class="btn primary">' + (ed ? '儲存修改' : '送出申請') + '</button></div></form>' +
       '<h3 style="margin:18px 0 10px">我的申請紀錄</h3>' +
-      (d.applications.length ? '<div class="tbl-wrap"><table><thead><tr><th>假別</th><th>日期</th><th>時間</th><th class="r">時數</th><th>事由／證明</th><th>狀態</th><th></th></tr></thead><tbody>' +
+      (d.applications.length ? '<div class="tbl-wrap"><table><thead><tr><th>申請時間</th><th>假別</th><th>日期</th><th>時間</th><th class="r">時數</th><th>事由／證明</th><th>狀態</th><th></th></tr></thead><tbody>' +
         d.applications.map(function (a) {
-          return '<tr><td>' + esc(a.type) + '</td><td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '</td><td class="small">' + tl(a) + '</td><td class="r">' + a.hours + '</td>' +
+          return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td>' + esc(a.type) + '</td><td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '</td><td class="small">' + tl(a) + '</td><td class="r">' + a.hours + '</td>' +
             '<td class="small">' + esc(a.reason) + (a.proofName ? '<br><span class="muted">📎 ' + esc(a.proofName) + '</span>' : '') + (a.note ? '<br><span class="muted">人事：' + esc(a.note) + '</span>' : '') + '</td>' +
-            '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span></td><td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' ? '<button class="btn sm" data-edit="' + esc(a.id) + '">修改</button><button class="btn sm" data-cancel="' + esc(a.id) + '">取消</button>' : '') + '</td></tr>';
+            '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.reviewedAt ? '<br><span class="muted small">審核 ' + esc(a.reviewedAt) + '</span>' : '') + editLog(a) + '</td><td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' ? '<button class="btn sm" data-edit="' + esc(a.id) + '">修改</button><button class="btn sm" data-cancel="' + esc(a.id) + '">取消</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="empty">還沒有申請紀錄。</div>');
     var f = document.getElementById('lvf');
     function days() { return Math.round((new Date(f.end.value) - new Date(f.start.value)) / 864e5) + 1; }
@@ -656,7 +657,7 @@
           list.map(function (a, i) {
             return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td><a href="#" data-who="' + esc(a.empNo) + '">' + esc(a.name) + '</a><br><span class="muted small">' + esc(a.empNo) + '</span></td><td>' + esc(a.type) + '</td>' +
               '<td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '<br><span class="muted">' + (a.startTime ? tl(a) + '，' : '') + '每日 ' + a.perDay + 'h</span></td><td class="r">' + a.hours + '</td>' +
-              '<td class="small">' + esc(a.reason) + (a.proofId ? '<br><a href="https://drive.google.com/file/d/' + encodeURIComponent(a.proofId) + '/view" target="_blank" rel="noopener">📎 查看證明</a>' : (a.type === '病假' ? '<br><span style="color:var(--bad)">未附證明</span>' : '')) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + (a.edits ? '<br><span class="muted" title="' + esc(a.edits) + '">已修改過</span>' : '') + '</td>' +
+              '<td class="small">' + esc(a.reason) + (a.proofId ? '<br><a href="https://drive.google.com/file/d/' + encodeURIComponent(a.proofId) + '/view" target="_blank" rel="noopener">📎 查看證明</a>' : (a.type === '病假' ? '<br><span style="color:var(--bad)">未附證明</span>' : '')) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + editLog(a) + '</td>' +
               '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.warning ? '<br><span class="badge red" title="' + esc(a.warning) + '">⚠ 超過額度</span><div class="small" style="color:var(--bad);max-width:220px">' + esc(a.warning) + '</div>' : '') + (a.reviewer ? '<br><span class="muted small">' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</td>' +
               '<td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' || a.status === '已核准' ? '<button class="btn sm" data-mod="' + esc(a.id) + '">修改</button>' : '') + (a.status === '審核中' ? '<button class="btn sm primary" data-ok="' + esc(a.id) + '">核准</button><button class="btn sm danger" data-no="' + esc(a.id) + '">駁回</button>' :
                 a.status === '已核准' ? '<button class="btn sm" data-no="' + esc(a.id) + '">撤銷</button>' : '') + '</td></tr>';

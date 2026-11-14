@@ -219,6 +219,7 @@ var ACTIONS = {
       if (String(data[i][0]) !== String(r.id) || String(data[i][1]) !== s.id) continue;
       if (data[i][9] !== '審核中') throw new Error('只有「審核中」的申請可以取消，已核准的請洽人事');
       sh.getRange(i + 1, 10).setValue('已取消');
+      sh.getRange(i + 1, 20).setValue((data[i][19] ? data[i][19] + '\n' : '') + now_() + ' 員工取消');
       log_(s.id, '取消請假', r.id);
       return { ok: true, data: leaveInfo_(leaveEmp_(s.id)) };
     }
@@ -543,6 +544,7 @@ function db_() {
   return SpreadsheetApp.openById(id);
 }
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+function ts_(v) { return v instanceof Date ? Utilities.formatDate(v, 'Asia/Taipei', 'yyyy/MM/dd HH:mm') : String(v || '').replace(/(\d{2}:\d{2}):\d{2}$/, '$1'); }
 function now_() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd HH:mm:ss'); }
 function hash_(pw, salt) {
   var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + '|' + pw, Utilities.Charset.UTF_8);
@@ -676,7 +678,7 @@ function leaveEmp_(empNo, adminView) {
 }
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
-    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13], warning: x[14] || '',
+    status: x[9], appliedAt: ts_(x[10]), reviewer: x[11], reviewedAt: ts_(x[12]), note: x[13], warning: x[14] || '',
     startTime: String(x[15] || ''), endTime: String(x[16] || ''), proofId: String(x[17] || ''), proofName: String(x[18] || ''), edits: String(x[19] || '') };
 }
 
@@ -823,7 +825,7 @@ function otSplit_(h, kind) {
 function otRow_(x) {
   var h = +x[6], k = String(x[7]);
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], date: normDate_(x[3]), start: String(x[4]), end: String(x[5]), hours: h, kind: k, reason: x[8],
-    status: x[9], appliedAt: x[10], reviewer: x[11], reviewedAt: x[12], note: x[13], warning: x[14] || '', split: otSplit_(h, k) };
+    status: x[9], appliedAt: ts_(x[10]), reviewer: x[11], reviewedAt: ts_(x[12]), note: x[13], warning: x[14] || '', split: otSplit_(h, k) };
 }
 function otInfo_(empNo) {
   var data = sheet_('加班').getDataRange().getValues(), list = [];
