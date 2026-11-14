@@ -259,7 +259,7 @@
     }
     if (b.quota == null) return { left: null, note: '不限額度，今年已請 ' + (b.used + b.pending - back) + ' 小時' };
     var l = Math.round((b.quota - b.used - b.pending + back) * 10) / 10;
-    return { left: l, note: (LV_AS[t] ? '併入事假計算，' : '') + '額度 ' + b.quota + ' 小時，剩餘 ' + Math.max(0, l) + ' 小時' + (b.pending - back > 0 ? '（含審核中 ' + (b.pending - back) + ' 小時已先扣）' : '') };
+    return { left: l, note: (LV_AS[t] ? '併入事假計算，' : '') + '額度 ' + b.quota + ' 小時' + (b.carryActive ? '（本期 ' + b.base + ' ＋ 上期遞延 ' + b.carry + '，遞延的使用期限至 ' + b.carryEnd + '）' : '') + '，剩餘 ' + Math.max(0, l) + ' 小時' + (b.pending - back > 0 ? '（含審核中 ' + (b.pending - back) + ' 小時已先扣）' : '') };
   }
   function renderLeave(body, d, editing) {
     var today = d.today.replace(/\//g, '-'), ed = editing || null;

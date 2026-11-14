@@ -17,7 +17,7 @@ var APP = {
   FIXED_PASSWORD: true, // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
   LEAVE_DAY_HOURS: 8,   // （已改用 WORKDAY_HOURS / WORKDAY_HOURS_BY_EMP 換算額度，保留供參考）
   LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
-  OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
+  ANNUAL_DEFER_MONTHS: 1, OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
   OVERTIME_MONTH_LIMIT: 46,    // 勞基法第 32 條：每月延長工時上限（超過只提醒）
   LEAVE_BREAKS: [],         // 請假時數 = 結束 − 開始，不扣午休與休息（要扣時填入時段，例 [['12:00','13:00']]）
   LEAVE_BREAKS_NIGHT: [],
@@ -724,8 +724,22 @@ function leaveInfo_(emp, excludeId) {
   var H = workdayHours_(emp.empNo), out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
     breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT), proofRequired: APP.PROOF_REQUIRED, noReason: APP.NO_REASON, workday: workdayHours_(emp.empNo) };
   if (emp.hire) {
-    var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end);
-    out.balances.push({ type: '特休', rule: '週年制（到職日 ' + emp.hire + '，' + w.label + '）', from: w.start, to: w.end, quota: w.days * H, used: t.used, pending: t.pending });
+    var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end), base = w.days * H;
+    var rule = '週年制（到職日 ' + emp.hire + '，' + w.label + '）', carry = 0, cEnd = '', dU = 0, quota = base, expired = 0;
+    // 遞延：上一個週年期間沒休完的，可在新期間的前 N 個月內使用（先扣遞延時數）
+    if (APP.ANNUAL_DEFER_MONTHS && w.start > emp.hire) {
+      var pw = annualWindow_(emp.hire, prevDay_(w.start)), pt = sum('特休', pw.start, pw.end);
+      carry = Math.max(0, pw.days * H - pt.used - pt.pending);
+      if (carry) {
+        cEnd = prevDay_(addYM_(w.start, 0, APP.ANNUAL_DEFER_MONTHS));
+        var dt = sum('特休', w.start, cEnd); dU = dt.used + dt.pending;
+        if (today <= cEnd) { quota = base + carry; rule += '；含上期遞延 ' + carry + ' 小時，須在 ' + cEnd + ' 前休完'; }
+        else { var useC = Math.min(carry, dU); quota = base + useC; expired = carry - useC;
+               rule += '；上期遞延 ' + carry + ' 小時已於 ' + cEnd + ' 到期' + (expired ? '，未休 ' + expired + ' 小時應折發工資' : '（已休完）'); }
+      }
+    }
+    out.balances.push({ type: '特休', rule: rule, from: w.start, to: w.end, quota: quota, used: t.used, pending: t.pending,
+      base: base, carry: carry, carryEnd: cEnd, carryUsed: dU, carryExpired: expired, carryActive: !!carry && today <= cEnd });
   } else {
     out.balances.push({ type: '特休', rule: '尚無到職日資料（上傳含「特休」分頁的長期附表後自動帶入）', from: '', to: '', quota: null, used: 0, pending: 0 });
   }
@@ -770,6 +784,14 @@ function checkQuota_(info, type, days, perDay) {
     return '';
   }
   var warns = [];
+  if (type === '特休' && b.carry && b.carryActive) {
+    // 遞延時數只能用在 carryEnd 以前的日期
+    var nIn = days.filter(function (d) { return d <= b.carryEnd; }).length * perDay, nOut = need - nIn;
+    var dU = b.carryUsed + nIn, aU = b.used + b.pending - b.carryUsed + nOut;
+    if (Math.max(0, dU - b.carry) + aU > b.base)
+      throw new Error('特休不足：上期遞延 ' + b.carry + ' 小時只能在 ' + b.carryEnd + ' 前使用，本期額度 ' + b.base + ' 小時，這次申請 ' + need + ' 小時超過可用時數');
+    return '';
+  }
   if (b && b.quota != null && b.used + b.pending + need > b.quota) {
     var msg = base + '剩餘 ' + Math.max(0, b.quota - b.used - b.pending) + ' 小時，本次申請 ' + need + ' 小時，已超過全年 ' + b.quota + ' 小時額度';
     if (type === '特休') throw new Error(msg);
