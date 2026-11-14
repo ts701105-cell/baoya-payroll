@@ -196,7 +196,7 @@
   }
 
   /* ───────── 請假（長期月薪） ───────── */
-  function hh(h, H) { h = Math.round((Number(h) || 0) * 10) / 10; var d = H ? Math.round(h / H * 100) / 100 : 0; return h + ' 小時' + (H ? '<span class="muted small">（' + d + ' 天）</span>' : ''); }
+  function hh(h, H) { h = Math.round((Number(h) || 0) * 10) / 10; var d = H ? Math.round(h / H * 100) / 100 : 0; return h + ' 小時'; }
   var ST = { '審核中': 'orange', '已核准': 'green', '已駁回': 'red', '已取消': '' };
   function balancesHtml(d) {
     return '<div class="stats">' + d.balances.map(function (b) {
@@ -205,7 +205,7 @@
         '<div class="v">' + (b.freeLeft != null ? b.freeLeft + '<small>小時不併入病假</small>' : rem == null ? (b.used + b.pending) + '<small>小時已請</small>' : Math.max(0, rem) + '<small>小時可請</small>') + '</div>' +
         '<div class="muted small">' + (b.quota != null ? '額度 ' + b.quota + 'h・' : '') + '已休 ' + b.used + 'h' + (b.pending ? '・審核中 ' + b.pending + 'h' : '') + '</div>' +
         '<div class="muted small" style="margin-top:4px">' + esc(b.rule) + '</div></div>';
-    }).join('') + '</div><div class="muted small" style="margin:-8px 0 14px">額度以 1 天 = ' + d.dayHours + ' 小時換算。已休時數 = 已上傳的出勤紀錄 ＋ 已核准的申請。</div>';
+    }).join('') + '</div><div class="muted small" style="margin:-8px 0 14px">所有假別以小時計算，請假以半小時為單位。已休時數 = 已上傳的出勤紀錄 ＋ 已核准的申請。</div>';
   }
   function viewLeave(body) {
     body.innerHTML = '<div class="empty">讀取中…</div>';
@@ -219,7 +219,7 @@
       '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { return '<option>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
       '<label class="field" style="margin:0;flex:1"><span>開始日</span><input type="date" name="start" value="' + today + '" required></label>' +
       '<label class="field" style="margin:0;flex:1"><span>結束日</span><input type="date" name="end" value="' + today + '" required></label>' +
-      '<label class="field" style="margin:0;width:120px"><span>每日時數</span><input type="number" name="hpd" value="8" min="0.5" max="10" step="0.5" required></label></div>' +
+      '<label class="field" style="margin:0;width:120px"><span>每日請假時數</span><input type="number" name="hpd" value="8" min="0.5" max="10" step="0.5" required></label></div>' +
       '<label class="field"><span>事由（選填）</span><textarea name="reason" rows="2"></textarea></label>' +
       '<div id="lvmsg"></div><div class="row" style="justify-content:flex-end"><button class="btn primary">送出申請</button></div></form>' +
       '<h3 style="margin:18px 0 10px">我的申請紀錄</h3>' +
@@ -233,7 +233,7 @@
     f.onsubmit = function (e) {
       e.preventDefault();
       var days = Math.round((new Date(f.end.value) - new Date(f.start.value)) / 864e5) + 1;
-      confirmBox('申請 <b>' + esc(f.type.value) + '</b>：' + esc(f.start.value) + (f.end.value !== f.start.value ? '～' + esc(f.end.value) : '') + '，共 ' + days + ' 天 × ' + f.hpd.value + ' 小時 = <b>' + (days * f.hpd.value) + ' 小時</b>？', '送出').then(function (ok) {
+      confirmBox('申請 <b>' + esc(f.type.value) + '</b>：' + esc(f.start.value) + (f.end.value !== f.start.value ? '～' + esc(f.end.value) : '') + '，每日 ' + f.hpd.value + ' 小時，合計 <b>' + (days * f.hpd.value) + ' 小時</b>？', '送出').then(function (ok) {
         if (!ok) return;
         api('applyLeave', { token: state.emp.token, type: f.type.value, start: f.start.value, end: f.end.value, hoursPerDay: Number(f.hpd.value), reason: f.reason.value })
           .then(function (j) { renderLeave(body, j.data); modal('<div class="msg ok">已送出，等候人事審核。</div>' + (j.warning ? '<div class="msg warn">' + esc(j.warning) + '</div>' : '') + '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
