@@ -15,7 +15,7 @@ var APP = {
   MAX_FAIL: 5,          // 連續輸錯幾次後鎖定
   LOCK_MINUTES: 15,
   FIXED_PASSWORD: true, // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
-  LEAVE_DAY_HOURS: 8,   // （已改用 WORKDAY_HOURS / WORKDAY_HOURS_BY_EMP 換算額度，保留供參考）
+  LEAVE_DAY_HOURS: 8,   // 給假額度：1 天 = 8 小時（事假 14 天 = 112 小時、特休天數 × 8…），所有人相同
   LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
   ANNUAL_DEFER_MONTHS: 1, OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
   OVERTIME_MONTH_LIMIT: 46,    // 勞基法第 32 條：每月延長工時上限（超過只提醒）
@@ -723,7 +723,7 @@ function leaveInfo_(emp, excludeId) {
     });
     return t;
   }
-  var H = workdayHours_(emp.empNo), out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
+  var H = APP.LEAVE_DAY_HOURS, out = { emp: emp, today: today, dayHours: H, balances: [], applications: apps, types: Object.keys(LEAVE_TYPES),
     breaks: APP.LEAVE_BREAKS.concat(APP.LEAVE_BREAKS_NIGHT), proofRequired: APP.PROOF_REQUIRED, noReason: APP.NO_REASON, workday: workdayHours_(emp.empNo) };
   if (emp.hire) {
     var w = annualWindow_(emp.hire, today), t = sum('特休', w.start, w.end), base = w.days * H;
@@ -755,7 +755,7 @@ function leaveInfo_(emp, excludeId) {
     var t = sum(ty, Y0, Y1), rule = '曆年制（' + Y0 + '～' + Y1 + '）';
     if (ty === '病假' && ovAll) { t.used += ovUsed; t.pending += ovAll - ovUsed; rule += '；含生理假超過 ' + free + ' 小時併入 ' + ovAll + ' 小時'; }
     if (ty === '生理假') {
-      out.balances.push({ type: ty, rule: '每月 ' + H + ' 小時；全年前 ' + free + ' 小時不併入病假，超過併入病假', from: Y0, to: Y1, quota: null, used: t.used, pending: t.pending, freeLeft: Math.max(0, free - t.used - t.pending) });
+      out.balances.push({ type: ty, rule: '每月 1 天；全年前 ' + free + ' 小時不併入病假，超過併入病假', from: Y0, to: Y1, quota: null, used: t.used, pending: t.pending, freeLeft: Math.max(0, free - t.used - t.pending) });
       return;
     }
     if (c.days || t.used || t.pending) out.balances.push({ type: ty, rule: rule, from: Y0, to: Y1, quota: c.days ? c.days * H : null, used: t.used, pending: t.pending });
@@ -775,7 +775,7 @@ function checkQuota_(info, type, days, perDay) {
     var byMonth = {};
     days.forEach(function (d) { byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1; });
     info.applications.forEach(function (a) { if (a.type === type && a.status !== '已駁回' && a.status !== '已取消') dateRange_(a.start, a.end).forEach(function (d) { byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1; }); });
-    Object.keys(byMonth).forEach(function (m) { if (byMonth[m] > c.monthDays) throw new Error(type + '每月最多 ' + (c.monthDays * H) + ' 小時（' + m + ' 已有申請）'); });
+    Object.keys(byMonth).forEach(function (m) { if (byMonth[m] > c.monthDays) throw new Error(type + '每月最多 ' + c.monthDays + ' 天（' + m + ' 已有申請）'); });
   }
   var need = days.length * perDay;
   if (type === '生理假') {

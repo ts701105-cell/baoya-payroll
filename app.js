@@ -256,7 +256,7 @@
     if (!b) return { left: null, note: '不限額度' };
     if (b.freeLeft != null) {
       var fl = Math.round((b.freeLeft + back) * 10) / 10;
-      return { left: fl, note: '全年還有 ' + fl + ' 小時不併入病假（每月最多 ' + d.workday + ' 小時）' };
+      return { left: fl, note: '全年還有 ' + fl + ' 小時不併入病假（每月 1 天）' };
     }
     if (b.quota == null) return { left: null, note: '不限額度，今年已請 ' + (b.used + b.pending - back) + ' 小時' };
     var l = Math.round((b.quota - b.used - b.pending + back) * 10) / 10;
@@ -273,7 +273,7 @@
       '<label class="field" style="margin:0;flex:1"><span>開始日</span><input type="date" name="start" value="' + v.start + '" required></label>' +
       '<label class="field" style="margin:0;flex:1"><span>結束日</span><input type="date" name="end" value="' + v.end + '" required></label></div>' +
       '<div class="row" style="margin-top:12px">' +
-      '<label class="field" style="margin:0;width:150px"><span>請假方式</span><select name="mode"><option value="day"' + (v.mode === 'day' ? ' selected' : '') + '>整天（1 天 ' + d.workday + ' 小時）</option><option value="hour"' + (v.mode === 'hour' ? ' selected' : '') + '>按時數</option></select></label>' +
+      '<label class="field" style="margin:0;width:150px"><span>請假方式</span><select name="mode"><option value="day"' + (v.mode === 'day' ? ' selected' : '') + '>整天（扣 ' + d.workday + ' 小時）</option><option value="hour"' + (v.mode === 'hour' ? ' selected' : '') + '>按時數</option></select></label>' +
       '<label class="field lvtime" style="margin:0;width:130px"><span>每日開始時間</span>' + timeSelect('st', v.st) + '</label>' +
       '<label class="field lvtime" style="margin:0;width:130px"><span>每日結束時間</span>' + timeSelect('en', v.en) + '</label>' +
       '<div id="lvhrs" class="muted small" style="align-self:flex-end;padding-bottom:10px"></div></div>' +
