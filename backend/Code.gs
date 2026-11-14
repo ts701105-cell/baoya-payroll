@@ -57,18 +57,14 @@ function setup() {
   Logger.log('資料庫試算表：' + ss.getUrl());
 }
 
-/* 忘記管理員密碼時，在編輯器執行這個函式，會重設 admin 並把新密碼印在執行紀錄 */
+/* 忘記管理員密碼時，在編輯器執行這個函式，會重設第一個管理員帳號，新密碼印在執行紀錄 */
 function resetAdminPassword() {
   var sh = db_().getSheetByName('管理員');
-  var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === 'admin') {
-      var pw = randomPassword_(), salt = Utilities.getUuid();
-      sh.getRange(i + 1, 3, 1, 4).setValues([[hash_(pw, salt), salt, 'Y', '啟用']]);
-      Logger.log('admin 新的初始密碼：' + pw);
-      return;
-    }
-  }
+  if (sh.getLastRow() < 2) throw new Error('沒有管理員帳號');
+  var id = sh.getRange(2, 1).getValue();
+  var pw = randomPassword_(), salt = Utilities.getUuid();
+  sh.getRange(2, 3, 1, 4).setValues([[hash_(pw, salt), salt, 'Y', '啟用']]);
+  Logger.log('管理員 ' + id + ' 新的初始密碼：' + pw);
 }
 
 /* ───────────── 進入點 ───────────── */
