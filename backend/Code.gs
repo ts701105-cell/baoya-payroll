@@ -17,7 +17,7 @@ var APP = {
   FIXED_PASSWORD: true, // true：員工密碼固定為身分證字號，由人事設定，員工不能自行變更
   LEAVE_DAY_HOURS: 8,   // 給假額度：1 天 = 8 小時（事假 14 天 = 112 小時、特休天數 × 8…），所有人相同
   LEAVE_CATEGORY: '長期月薪', // 只有這個類別的員工可以使用請假功能
-  ANNUAL_DEFER_MONTHS: 1, OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
+  ANNUAL_DEFER_MONTHS: 1, CLOCK_EMP: ['164580'], CLOCK_NIGHT_HOURS: 16, OVERTIME_EMP: ['164580'],    // 可以線上報加班的員工（東慧員編）：張銘峰
   OVERTIME_MONTH_LIMIT: 46,    // 勞基法第 32 條：每月延長工時上限（超過只提醒）
   LEAVE_BREAKS: [],         // 請假時數 = 結束 − 開始，不扣午休與休息（要扣時填入時段，例 [['12:00','13:00']]）
   LEAVE_BREAKS_NIGHT: [],
@@ -58,6 +58,7 @@ var SHEETS = {
   紀錄: ['時間', '帳號', '動作', '說明'],
   請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
+  打卡: ['東慧員編', '姓名', '日期', '上班', '下班', '工時', '上班裝置', '下班裝置', '備註', '修改紀錄'],
   加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '補償方式']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
@@ -140,7 +141,7 @@ var ACTIONS = {
       var mustChange = APP.FIXED_PASSWORD ? false : (!row[5] || row[7] === 'Y');
       var token = issueToken_({ role: 'emp', id: String(row[0]) });
       log_(String(row[0]), '登入', '');
-      return { ok: true, token: token, name: row[2], empNo: String(row[0]), category: row[3], mustChange: mustChange, overtime: APP.OVERTIME_EMP.indexOf(String(row[0])) >= 0 };
+      return { ok: true, token: token, name: row[2], empNo: String(row[0]), category: row[3], mustChange: mustChange, overtime: APP.OVERTIME_EMP.indexOf(String(row[0])) >= 0, clock: APP.CLOCK_EMP.indexOf(String(row[0])) >= 0 };
     }
     fail_('emp:' + id);
     throw new Error('員編或密碼錯誤');
@@ -226,6 +227,85 @@ var ACTIONS = {
       return { ok: true, data: leaveInfo_(leaveEmp_(s.id)) };
     }
     throw new Error('找不到這筆申請');
+  },
+
+  /* 上下班打卡 */
+  myClock: function (r) {
+    var s = auth_(r.token, 'emp');
+    return { ok: true, data: clockInfo_(clockEmp_(s.id)) };
+  },
+
+  punch: function (r) {
+    var s = auth_(r.token, 'emp');
+    var emp = clockEmp_(s.id), kind = r.kind === 'out' ? 'out' : 'in';
+    var ua = String(r.device || '').slice(0, 120), now = new Date();
+    var today = fmt_(now), hm = Utilities.formatDate(now, 'Asia/Taipei', 'HH:mm'), msg;
+    var lock = LockService.getScriptLock(); lock.waitLock(30000);
+    try {
+      var sh = sheet_('打卡'), data = sh.getDataRange().getValues(), rowToday = -1, rowOpen = -1;
+      for (var i = 1; i < data.length; i++) {
+        if (String(data[i][0]) !== emp.empNo) continue;
+        var d = normDate_(data[i][2]);
+        if (d === today) rowToday = i;
+        if (data[i][3] && !data[i][4] && (d === today || d === prevDay_(today))) rowOpen = i;
+      }
+      if (kind === 'in') {
+        if (rowToday >= 0 && data[rowToday][3]) throw new Error('今天 ' + tm_(data[rowToday][3]) + ' 已經打過上班卡');
+        if (rowToday >= 0) {
+          var oT = tm_(data[rowToday][4]);
+          sh.getRange(rowToday + 1, 4, 1, 4).setValues([[hm, oT, oT && oT > hm ? clockHours_(today, hm, today, oT) : '', ua]]);
+        }
+        else sh.appendRow([emp.empNo, emp.name, today, hm, '', '', ua, '', '', '']);
+        msg = '上班打卡成功：' + today + ' ' + hm;
+      } else {
+        var row = -1;
+        if (rowOpen >= 0) {   // 有上班卡、還沒下班卡（夜班可接前一天，16 小時內）
+          var od = normDate_(data[rowOpen][2]), mins = clockMins_(od, tm_(data[rowOpen][3]), today, hm);
+          if (od === today || mins <= APP.CLOCK_NIGHT_HOURS * 60) row = rowOpen;
+        }
+        if (row < 0 && rowToday >= 0) row = rowToday;   // 今天已有紀錄 → 更新下班時間
+        if (row >= 0) {
+          var d0 = normDate_(data[row][2]), inT = tm_(data[row][3]), old = tm_(data[row][4]);
+          sh.getRange(row + 1, 5, 1, 4).setValues([[hm, inT ? clockHours_(d0, inT, today, hm) : '', data[row][6], ua]]);
+          if (old) sh.getRange(row + 1, 10).setValue((data[row][9] ? data[row][9] + '\n' : '') + now_() + ' 重打下班卡（原 ' + old + '）');
+          msg = '下班打卡成功：' + today + ' ' + hm + (d0 !== today ? '（接 ' + d0 + ' 的上班卡）' : '');
+        } else {
+          sh.appendRow([emp.empNo, emp.name, today, '', hm, '', '', ua, '未打上班卡', '']);
+          msg = '下班打卡成功：' + today + ' ' + hm + '（今天沒有上班卡，請洽人事補登）';
+        }
+      }
+    } finally { lock.releaseLock(); }
+    log_(emp.empNo, kind === 'in' ? '上班打卡' : '下班打卡', today + ' ' + hm);
+    return { ok: true, message: msg, data: clockInfo_(emp) };
+  },
+
+  adminClocks: function (r) {
+    auth_(r.token, 'admin');
+    var ym = String(r.month || fmt_(new Date()).slice(0, 7)), out = [];
+    var data = sheet_('打卡').getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) { var x = clockRow_(data[i]); if (x.date.slice(0, 7) === ym) out.push(x); }
+    out.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    return { ok: true, month: ym, list: out, emps: APP.CLOCK_EMP.map(function (e) { var f = findEmp_(e); return { empNo: e, name: f ? f.row[2] : e }; }) };
+  },
+
+  adminEditClock: function (r) {
+    var s = auth_(r.token, 'admin');
+    var empNo = String(r.empNo || ''), date = normDate_(r.date), inT = String(r.in || ''), outT = String(r.out || ''), note = String(r.note || '');
+    if (!date) throw new Error('請填日期');
+    [inT, outT].forEach(function (t) { if (t && !/^\d{2}:\d{2}$/.test(t)) throw new Error('時間格式要像 08:30'); });
+    var f = findEmp_(empNo); if (!f) throw new Error('找不到員工');
+    var sh = sheet_('打卡'), data = sh.getDataRange().getValues(), row = -1;
+    for (var i = 1; i < data.length; i++) if (String(data[i][0]) === empNo && normDate_(data[i][2]) === date) row = i;
+    var hours = inT && outT ? clockHours_(date, inT, outT <= inT ? fmt_(new Date(toDate_(date).getTime() + 864e5)) : date, outT) : '';
+    if (row >= 0) {
+      var o = data[row], hist = (o[9] ? o[9] + '\n' : '') + now_() + ' ' + s.id + ' 修改（原：' + (tm_(o[3]) || '—') + '～' + (tm_(o[4]) || '—') + '）';
+      sh.getRange(row + 1, 4, 1, 3).setValues([[inT, outT, hours]]);
+      sh.getRange(row + 1, 9, 1, 2).setValues([[note, hist]]);
+    } else {
+      sh.appendRow([empNo, f.row[2], date, inT, outT, hours, '', '', note, now_() + ' ' + s.id + ' 補登']);
+    }
+    log_(s.id, '修改打卡', f.row[2] + ' ' + date + ' ' + (inT || '—') + '～' + (outT || '—'));
+    return { ok: true };
   },
 
   /* 報加班 */
@@ -821,6 +901,30 @@ function checkQuota_(info, type, days, perDay) {
   return warns.join('；');
 }
 
+
+/* ───────────── 上下班打卡 ───────────── */
+function clockEmp_(empNo) {
+  if (APP.CLOCK_EMP.indexOf(String(empNo)) < 0) throw new Error('你的帳號沒有開放線上打卡，請洽人事');
+  var f = findEmp_(empNo); return { empNo: String(empNo), name: f.row[2] };
+}
+function tm_(v) { if (!v) return ''; if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Taipei', 'HH:mm'); var m = String(v).match(/(\d{1,2}):(\d{2})/); return m ? ('0' + m[1]).slice(-2) + ':' + m[2] : ''; }
+function clockMins_(d1, t1, d2, t2) { return Math.round((toDate_(d2).getTime() - toDate_(d1).getTime()) / 6e4) + hm_(t2) - hm_(t1); }
+function clockHours_(d1, t1, d2, t2) { return Math.round(clockMins_(d1, t1, d2, t2) / 60 * 100) / 100; }
+function clockRow_(x) {
+  return { empNo: String(x[0]), name: x[1], date: normDate_(x[2]), in: tm_(x[3]), out: tm_(x[4]), hours: x[5] === '' ? '' : +x[5], note: String(x[8] || ''), edits: String(x[9] || '') };
+}
+function clockInfo_(emp) {
+  var now = new Date(), today = fmt_(now), ym = today.slice(0, 7), prevYm = fmt_(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);
+  var data = sheet_('打卡').getDataRange().getValues(), list = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) !== emp.empNo) continue;
+    var x = clockRow_(data[i]); if (x.date.slice(0, 7) === ym || x.date.slice(0, 7) === prevYm) list.push(x);
+  }
+  list.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  var open = list.filter(function (x) { return x.in && !x.out && (x.date === today || x.date === prevDay_(today)); })[0] || null;
+  return { today: today, now: Utilities.formatDate(now, 'Asia/Taipei', 'HH:mm'), todayRec: list.filter(function (x) { return x.date === today; })[0] || null, open: open, list: list,
+    monthHours: Math.round(list.filter(function (x) { return x.date.slice(0, 7) === ym && x.hours; }).reduce(function (t, x) { return t + x.hours; }, 0) * 100) / 100 };
+}
 
 /* ───────────── 報加班 ───────────── */
 var OT_KINDS = ['平日', '休息日', '國定假日', '例假日'];

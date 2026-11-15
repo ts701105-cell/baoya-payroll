@@ -123,6 +123,7 @@
     document.getElementById('bout').onclick = function () { state.emp = null; state.empMode = 'pay'; store('emp', null); route(); };
     $app.querySelectorAll('[data-m]').forEach(function (b) { b.onclick = function () { state.empMode = b.dataset.m; viewEmployee(); }; });
     if (canLeave() && state.empMode === 'leave') { document.getElementById('plist').innerHTML = ''; return viewLeave(document.getElementById('pbody')); }
+    if (state.emp.clock && state.empMode === 'clock') { document.getElementById('plist').innerHTML = ''; return viewClock(document.getElementById('pbody')); }
     if (state.emp.overtime && state.empMode === 'ot') { document.getElementById('plist').innerHTML = ''; return viewOvertime(document.getElementById('pbody')); }
     api('myPeriods', { token: e.token }).then(function (j) {
       state.periods = j.periods;
@@ -137,7 +138,44 @@
   }
 
   function canLeave() { return state.emp && state.emp.category === '長期月薪'; }
-  function empTabs() { var t = [['pay', '薪資・出勤']]; if (canLeave()) t.push(['leave', '請假']); if (state.emp && state.emp.overtime) t.push(['ot', '報加班']); return t; }
+  function empTabs() { var t = [['pay', '薪資・出勤']]; if (canLeave()) t.push(['leave', '請假']); if (state.emp && state.emp.clock) t.push(['clock', '打卡']); if (state.emp && state.emp.overtime) t.push(['ot', '報加班']); return t; }
+
+  /* ───────── 上下班打卡 ───────── */
+  function viewClock(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('myClock', { token: state.emp.token }).then(function (j) { renderClock(body, j.data); })
+      .catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+  function renderClock(body, d) {
+    var t = d.todayRec, o = d.open;
+    var status = o && o.date !== d.today ? '上班中（' + esc(o.date) + ' ' + esc(o.in) + ' 上班）' :
+      t && t.in && t.out ? '今天已下班' : t && t.in ? '上班中（' + esc(t.in) + ' 上班）' : '今天還沒打上班卡';
+    body.innerHTML = '<div class="card" style="text-align:center">' +
+      '<div class="muted small">' + esc(d.today) + '</div><div id="clk" style="font-size:44px;font-weight:700;letter-spacing:2px;margin:6px 0">' + esc(d.now) + '</div>' +
+      '<div style="margin-bottom:14px">' + status + '</div>' +
+      '<div class="row" style="justify-content:center;gap:14px">' +
+      '<button class="btn primary" id="pin" style="min-width:130px;padding:14px 18px;font-size:17px"' + (t && t.in ? ' disabled' : '') + '>上班打卡</button>' +
+      '<button class="btn" id="pout" style="min-width:130px;padding:14px 18px;font-size:17px">下班打卡</button></div>' +
+      '<div class="muted small" style="margin-top:12px">' + (t ? '今天：上班 ' + (t.in || '—') + '・下班 ' + (t.out || '—') : '') + '</div>' +
+      '<div class="muted small">打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
+      '<h3 style="margin:18px 0 10px">打卡紀錄（本月與上月）<span class="muted small" style="font-weight:400">　本月合計 ' + d.monthHours + ' 小時</span></h3>' +
+      (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>上班</th><th>下班</th><th class="r">時數</th><th>備註</th></tr></thead><tbody>' +
+        d.list.map(function (x) { return '<tr><td>' + esc(x.date) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + '</td><td>' + (esc(x.out) || '<span class="muted">—</span>') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td><td class="small">' + esc(x.note) + '</td></tr>'; }).join('') +
+        '</tbody></table></div>' : '<div class="empty">還沒有打卡紀錄。</div>');
+    var tick = setInterval(function () { var el = document.getElementById('clk'); if (!el) return clearInterval(tick); var n = new Date(); el.textContent = ('0' + n.getHours()).slice(-2) + ':' + ('0' + n.getMinutes()).slice(-2) + ':' + ('0' + n.getSeconds()).slice(-2); }, 1000);
+    function go(kind) {
+      var label = kind === 'in' ? '上班' : '下班';
+      confirmBox('確定打<b>' + label + '卡</b>？', label + '打卡').then(function (ok) {
+        if (!ok) return;
+        api('punch', { token: state.emp.token, kind: kind, device: navigator.userAgent }).then(function (j) {
+          renderClock(body, j.data);
+          modal('<div class="msg ok">' + esc(j.message) + '</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>');
+        }).catch(function (e) { alertMsg(e.message); });
+      });
+    }
+    document.getElementById('pin').onclick = function () { go('in'); };
+    document.getElementById('pout').onclick = function () { go('out'); };
+  }
 
   /* ───────── 報加班 ───────── */
   function otSplitHtml(sp) { return (sp || []).map(function (x) { return '<span class="pill">' + esc(x.label) + ' <b>' + x.hours + 'h</b></span>'; }).join(' '); }
@@ -434,14 +472,14 @@
   /* ───────── 管理員 ───────── */
   function viewAdmin() {
     var a = state.admin;
-    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['ots', '加班審核'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
+    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['ots', '加班審核'], ['clocks', '打卡紀錄'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
     $app.innerHTML = bar('<div class="who"><b>' + esc(a.name || '管理員') + '</b><br><span class="muted small">管理後台</span></div><button class="btn sm" id="apw">改密碼</button><button class="btn sm" id="aout">登出</button>') +
       '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (state.adminTab === t[0] ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div><div id="abody"></div>';
     document.getElementById('aout').onclick = function () { state.admin = null; store('admin', null); route(); };
     document.getElementById('apw').onclick = function () { viewChangePw(true, true); };
     $app.querySelectorAll('.tab').forEach(function (b) { b.onclick = function () { state.adminTab = b.dataset.t; viewAdmin(); }; });
     var body = document.getElementById('abody');
-    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, ots: adminOvertimes, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
+    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, ots: adminOvertimes, clocks: adminClocks, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
   }
 
   function adminUpload(body) {
@@ -733,6 +771,39 @@
       }
       body.querySelectorAll('[data-ok]').forEach(function (b) { b.onclick = function () { review(b.dataset.ok, true); }; });
       body.querySelectorAll('[data-no]').forEach(function (b) { b.onclick = function () { review(b.dataset.no, false); }; });
+    }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+
+  function adminClocks(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('adminClocks', { token: state.admin.token, month: state.clockMonth }).then(function (j) {
+      state.clockMonth = j.month;
+      var tot = {}; j.list.forEach(function (x) { if (x.hours !== '') tot[x.name] = Math.round(((tot[x.name] || 0) + x.hours) * 100) / 100; });
+      body.innerHTML = '<div class="row" style="margin-bottom:12px"><label class="field" style="margin:0"><span>月份</span><input type="month" id="cm" value="' + esc(j.month.replace('/', '-')) + '"></label>' +
+        '<button class="btn" id="cadd">補登打卡</button><span class="muted small">' + Object.keys(tot).map(function (k) { return esc(k) + ' 本月 ' + tot[k] + ' 小時'; }).join('　') + '</span></div>' +
+        (j.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>姓名</th><th>上班</th><th>下班</th><th class="r">時數</th><th>備註</th><th></th></tr></thead><tbody>' +
+          j.list.map(function (x, i) {
+            return '<tr><td>' + esc(x.date) + '</td><td>' + esc(x.name) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + '</td><td>' + (esc(x.out) || '<span style="color:var(--bad)">未打</span>') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td>' +
+              '<td class="small">' + esc(x.note) + (x.edits ? '<details class="muted"><summary>異動紀錄</summary>' + x.edits.split('\n').map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') + '</details>' : '') + '</td>' +
+              '<td><button class="btn sm" data-ce="' + i + '">修改</button></td></tr>';
+          }).join('') + '</tbody></table></div>' : '<div class="empty">這個月沒有打卡紀錄。</div>');
+      document.getElementById('cm').onchange = function () { state.clockMonth = this.value.replace('-', '/'); adminClocks(body); };
+      function edit(x) {
+        x = x || { empNo: j.emps[0] && j.emps[0].empNo, date: '', in: '', out: '', note: '' };
+        modal('<b>' + (x.date ? '修改打卡' : '補登打卡') + '</b>' +
+          '<label class="field"><span>員工</span><select id="ce_emp"' + (x.date ? ' disabled' : '') + '>' + j.emps.map(function (e) { return '<option value="' + esc(e.empNo) + '"' + (e.empNo === x.empNo ? ' selected' : '') + '>' + esc(e.name) + '</option>'; }).join('') + '</select></label>' +
+          '<label class="field"><span>日期</span><input type="date" id="ce_date" value="' + esc(x.date.replace(/\//g, '-')) + '"' + (x.date ? ' disabled' : '') + '></label>' +
+          '<div class="row"><label class="field" style="flex:1"><span>上班</span><input type="time" id="ce_in" value="' + esc(x.in) + '"></label><label class="field" style="flex:1"><span>下班</span><input type="time" id="ce_out" value="' + esc(x.out) + '"></label></div>' +
+          '<label class="field"><span>備註（員工看得到）</span><input id="ce_note" value="' + esc(x.note) + '" autocomplete="off"></label>' +
+          '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button><button class="btn primary" id="ce_ok">儲存</button></div>', function (m, close) {
+          m.querySelector('#ce_ok').onclick = function () {
+            api('adminEditClock', { token: state.admin.token, empNo: m.querySelector('#ce_emp').value, date: m.querySelector('#ce_date').value, in: m.querySelector('#ce_in').value, out: m.querySelector('#ce_out').value, note: m.querySelector('#ce_note').value })
+              .then(function () { close(); adminClocks(body); }).catch(function (e) { alertMsg(e.message); });
+          };
+        });
+      }
+      document.getElementById('cadd').onclick = function () { edit(null); };
+      body.querySelectorAll('[data-ce]').forEach(function (b) { b.onclick = function () { edit(j.list[+b.dataset.ce]); }; });
     }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
   }
 
