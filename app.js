@@ -155,6 +155,14 @@
     });
   }
   function geocode(q) {
+    // 先用後端 Google 地圖（台灣門牌、樓層都找得到），失敗再改 OpenStreetMap
+    var p = state.admin ? api('adminGeocode', { token: state.admin.token, query: q }).then(function (j) { return j.list || []; }).catch(function () { return []; }) : Promise.resolve([]);
+    return p.then(function (list) {
+      if (list.length) return list;
+      return osmGeocode(q.replace(/\d+\s*樓.*$/, '').replace(/之\d+$/, ''));   // OSM 不認樓層，去掉再找
+    });
+  }
+  function osmGeocode(q) {
     var wait = 1100 - (Date.now() - (geocode.last || 0));   // OSM 每秒最多 1 次
     return new Promise(function (r) { setTimeout(r, Math.max(0, wait)); }).then(function () {
       geocode.last = Date.now();

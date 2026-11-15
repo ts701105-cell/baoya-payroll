@@ -306,6 +306,17 @@ var ACTIONS = {
     return { ok: true, list: locList_() };
   },
 
+  /* 以名稱或地址查座標（比照 hr-system：Google 地圖地理編碼，回傳最多 5 筆） */
+  adminGeocode: function (r) {
+    auth_(r.token, 'admin');
+    var q = String(r.query || '').trim();
+    if (!q) throw new Error('請輸入要搜尋的地點名稱或地址');
+    if (q.length > 200) throw new Error('搜尋文字過長');
+    var res = Maps.newGeocoder().setLanguage('zh-TW').setRegion('tw').geocode(q);
+    if (res.status !== 'OK' || !res.results) return { ok: true, list: [] };
+    return { ok: true, list: res.results.slice(0, 5).map(function (x) { return { name: x.formatted_address, lat: x.geometry.location.lat, lng: x.geometry.location.lng }; }) };
+  },
+
   adminDeleteLocation: function (r) {
     var s = auth_(r.token, 'admin');
     var sh = sheet_('打卡地點'), data = sh.getDataRange().getValues();
