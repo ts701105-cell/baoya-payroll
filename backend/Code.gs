@@ -1141,6 +1141,8 @@ function workdayHours_(empNo) { var h = APP.WORKDAY_HOURS_BY_EMP[String(empNo)];
 
 /* 第一次使用上傳證明前，在編輯器執行一次，授權存取雲端硬碟 */
 function authorizeDrive() {
-  var f = DriveApp.getRootFolder();
-  Logger.log('雲端硬碟授權完成：' + f.getName());
+  // 建一個測試檔再刪掉，讓 Google 要求完整的雲端硬碟權限（上傳請假證明照片需要）
+  var f = proofFolder_().createFile(Utilities.newBlob('test', 'text/plain', '授權測試.txt'));
+  f.setTrashed(true);
+  Logger.log('雲端硬碟授權完成，可以上傳證明照片到：' + proofFolder_().getName());
 }
