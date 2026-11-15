@@ -48,7 +48,7 @@ var LEAVE_TYPES = {
 };
 
 var SHEETS = {
-  員工: ['東慧員編', '寶雅員編', '姓名', '類別', '初始密碼', '密碼雜湊', '鹽', '需改密碼', '狀態', '最後更新'],
+  員工: ['東慧員編', '寶雅員編', '姓名', '類別', '初始密碼', '密碼雜湊', '鹽', '需改密碼', '狀態', '最後更新', '性別'],
   期間: ['期間代碼', '來源', '期間名稱', '起訖', '人數', '上傳時間', '上傳者', '已發布'],
   薪資單: ['期間代碼', '來源', '東慧員編', '姓名', '類別', '應付薪資', '個人負擔', '實領', '實付', '差額', '明細JSON'],
   出勤彙總: ['期間代碼', '來源', '東慧員編', '姓名', '類別', '明細JSON'],
@@ -541,14 +541,14 @@ var ACTIONS = {
       list.forEach(function (e) {
         var empNo = String(e.empNo || '').trim(), pw = String(e.idNo || '').trim().toUpperCase();
         if (!empNo || pw.length < 6) { skipped.push((e.name || '') + empNo); return; }
-        var salt = Utilities.getUuid(), h = hash_(pw, salt);
+        var salt = Utilities.getUuid(), h = hash_(pw, salt), sex = sexOf_(pw);
         if (idx[empNo] != null) {
           var i = idx[empNo], row = data[i];
-          sh.getRange(i + 1, 2, 1, 9).setValues([[row[1] || e.tcNo || '', row[2] || e.name || '', row[3] || e.category || '',
-            '', h, salt, '', row[8] === '停用' ? '停用' : '啟用', now_()]]);
+          sh.getRange(i + 1, 2, 1, 10).setValues([[row[1] || e.tcNo || '', row[2] || e.name || '', row[3] || e.category || '',
+            '', h, salt, '', row[8] === '停用' ? '停用' : '啟用', now_(), sex || row[10] || '']]);
           updated++;
         } else {
-          add.push([empNo, e.tcNo || '', e.name || '', e.category || '', '', h, salt, '', '啟用', now_()]);
+          add.push([empNo, e.tcNo || '', e.name || '', e.category || '', '', h, salt, '', '啟用', now_(), sex]);
           idx[empNo] = -1; added++;
         }
       });
@@ -801,7 +801,7 @@ function leaveEmp_(empNo, adminView) {
   var hire = '';
   var an = db_().getSheetByName('特休').getDataRange().getValues();
   for (var i = an.length - 1; i >= 1; i--) if (String(an[i][1]) === String(row[0]) && an[i][2]) { hire = normDate_(an[i][2]); break; }
-  return { empNo: String(row[0]), name: row[2], category: row[3], hire: hire, adminView: !!adminView };
+  return { empNo: String(row[0]), name: row[2], category: row[3], hire: hire, adminView: !!adminView, gender: String(row[10] || '') };
 }
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
@@ -894,6 +894,10 @@ function leaveInfo_(emp, excludeId) {
     if (compOk || earned || ct.used || ct.pending) out.balances.push({ type: '補休', rule: '加班換補休累計已核准 ' + earned + ' 小時，不分年度、不限期（請在期限內休完）', from: '', to: '', quota: earned, used: ct.used, pending: ct.pending });
   }
   if (!compOk && !emp.adminView) out.types = out.types.filter(function (t) { return t !== '補休'; });
+  if (emp.gender === '男') {   // 生理假只給女性
+    out.types = out.types.filter(function (t) { return t !== '生理假'; });
+    out.balances = out.balances.filter(function (b) { return b.type !== '生理假'; });
+  }
   return out;
 }
 function checkQuota_(info, type, days, perDay) {
@@ -946,6 +950,9 @@ function checkQuota_(info, type, days, perDay) {
   return warns.join('；');
 }
 
+
+/* 身分證第 2 碼：1、8 男；2、9 女 */
+function sexOf_(id) { var d = String(id || '').toUpperCase().charAt(1); return d === '1' || d === '8' ? '男' : d === '2' || d === '9' ? '女' : ''; }
 
 /* ───────────── 上下班打卡 ───────────── */
 function clockEmp_(empNo) {
@@ -1086,6 +1093,7 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
   var type = String(r.type || ''), start = normDate_(r.start), end = normDate_(r.end || r.start);
   var st = String(r.startTime || ''), en = String(r.endTime || ''), reason = String(r.reason || '').trim();
   if (!LEAVE_TYPES[type]) throw new Error('請選擇假別');
+  if (type === '生理假' && emp.gender === '男') throw new Error('生理假限女性員工申請');
   if (LEAVE_TYPES[type].comp && !compAllowed_(emp.empNo) && !byAdmin) throw new Error('你的帳號沒有開放補休');
   if (!start || !end) throw new Error('請填請假日期');
   if (end < start) throw new Error('結束日不能早於開始日');
