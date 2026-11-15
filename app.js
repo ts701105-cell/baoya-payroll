@@ -159,12 +159,13 @@
       '<label class="field" style="margin:0;width:120px"><span>結束</span><input type="time" name="end" value="21:30" required></label>' +
       '<label class="field" style="margin:0;width:110px"><span>扣休息（小時）</span><input type="number" name="brk" value="0" min="0" max="4" step="0.5"></label></div>' +
       '<div class="muted small" id="othint" style="margin-top:8px"></div>' +
+      '<label class="field"><span>補償方式</span><select name="comp"><option value="加班費">領加班費</option><option value="補休">換補休（不領加班費，之後到「請假」選補休）</option></select></label>' +
       '<label class="field"><span>加班事由</span><textarea name="reason" rows="2" required></textarea></label>' +
       '<div id="otmsg"></div><div class="row" style="justify-content:flex-end"><button class="btn primary">送出</button></div></form>' +
       '<h3 style="margin:18px 0 10px">我的加班紀錄</h3>' +
-      (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>時間</th><th>類別</th><th class="r">時數</th><th>倍率</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
+      (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>時間</th><th>類別</th><th class="r">時數</th><th>倍率</th><th>補償</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
         d.list.map(function (x) {
-          return '<tr><td>' + esc(x.date) + '</td><td class="small">' + esc(x.start) + '–' + esc(x.end) + '</td><td>' + esc(x.kind) + '</td><td class="r">' + x.hours + '</td><td class="small">' + otSplitHtml(x.split) + '</td><td class="small">' + esc(x.reason) + (x.note ? '<br><span class="muted">人事：' + esc(x.note) + '</span>' : '') + '</td>' +
+          return '<tr><td>' + esc(x.date) + '</td><td class="small">' + esc(x.start) + '–' + esc(x.end) + '</td><td>' + esc(x.kind) + '</td><td class="r">' + x.hours + '</td><td class="small">' + otSplitHtml(x.split) + '</td><td class="small">' + esc(x.comp) + '</td><td class="small">' + esc(x.reason) + (x.note ? '<br><span class="muted">人事：' + esc(x.note) + '</span>' : '') + '</td>' +
             '<td><span class="badge ' + (ST[x.status] || '') + '">' + esc(x.status) + '</span></td><td>' + (x.status === '審核中' ? '<button class="btn sm" data-otc="' + esc(x.id) + '">取消</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="empty">還沒有加班紀錄。</div>');
     var f = document.getElementById('otf');
@@ -181,7 +182,7 @@
       var h = calc();
       confirmBox('報加班 <b>' + esc(f.date.value) + '（' + esc(f.kind.value) + '）</b> ' + esc(f.start.value) + '–' + esc(f.end.value) + '，共 <b>' + h + ' 小時</b>？', '送出').then(function (ok) {
         if (!ok) return;
-        api('applyOvertime', { token: state.emp.token, date: f.date.value, kind: f.kind.value, start: f.start.value, end: f.end.value, breakHours: Number(f.brk.value) || 0, reason: f.reason.value })
+        api('applyOvertime', { token: state.emp.token, date: f.date.value, kind: f.kind.value, start: f.start.value, end: f.end.value, breakHours: Number(f.brk.value) || 0, comp: f.comp.value, reason: f.reason.value })
           .then(function (j) { renderOvertime(body, j.data); modal('<div class="msg ok">已送出，等候人事審核。</div>' + (j.warning ? '<div class="msg warn">' + esc(j.warning) + '</div>' : '') + '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
           .catch(function (err) { document.getElementById('otmsg').innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; });
       });
@@ -712,10 +713,10 @@
       body.innerHTML = '<div class="row" style="margin-bottom:12px">' + ['審核中', '已核准', '已駁回', '全部'].map(function (k) {
           return '<button class="chip' + (flt === k ? ' on' : '') + '" data-f="' + k + '">' + k + (k === '審核中' && pend ? '（' + pend + '）' : '') + '</button>'; }).join('') +
         '<span class="muted small">倍率依勞基法第 24 條拆分，計薪時參考。每月加班超過 46 小時會標示提醒。</span></div>' +
-        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>姓名</th><th>時間</th><th>類別</th><th class="r">時數</th><th>倍率</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
+        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>姓名</th><th>時間</th><th>類別</th><th class="r">時數</th><th>倍率</th><th>補償</th><th>事由</th><th>狀態</th><th></th></tr></thead><tbody>' +
           list.map(function (a) {
             return '<tr><td>' + esc(a.date) + '<br><span class="muted small">申請 ' + esc(a.appliedAt) + '</span></td><td>' + esc(a.name) + '<br><span class="muted small">' + esc(a.empNo) + '</span></td><td class="small">' + esc(a.start) + '–' + esc(a.end) + '</td><td>' + esc(a.kind) + '</td><td class="r">' + a.hours + '</td>' +
-              '<td class="small">' + otSplitHtml(a.split) + '</td><td class="small">' + esc(a.reason) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + '</td>' +
+              '<td class="small">' + otSplitHtml(a.split) + '</td><td class="small">' + (a.comp === '補休' ? '<b>補休</b><br><span class="muted">不計加班費</span>' : '加班費') + '</td><td class="small">' + esc(a.reason) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + '</td>' +
               '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.warning ? '<div class="small" style="color:var(--bad);max-width:220px">⚠ ' + esc(a.warning) + '</div>' : '') + (a.reviewer ? '<br><span class="muted small">' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</td>' +
               '<td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' ? '<button class="btn sm primary" data-ok="' + esc(a.id) + '">核准</button><button class="btn sm danger" data-no="' + esc(a.id) + '">駁回</button>' :
                 a.status === '已核准' ? '<button class="btn sm" data-no="' + esc(a.id) + '">撤銷</button>' : '') + '</td></tr>';

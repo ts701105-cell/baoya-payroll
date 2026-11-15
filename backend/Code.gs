@@ -42,7 +42,9 @@ var LEAVE_TYPES = {
   '公傷病假': { year: 'calendar' },
   '產檢假': { year: 'calendar' },
   '陪產檢及陪產假': { year: 'calendar' },
-  '家庭照顧假': { year: 'calendar', days: 7, countsAs: '事假' }
+  '家庭照顧假': { year: 'calendar', days: 7, countsAs: '事假' },
+  // 加班換補休：額度 = 已核准且選「補休」的加班時數；只有 OVERTIME_EMP 看得到、能申請
+  '補休': { year: 'calendar', comp: true }
 };
 
 var SHEETS = {
@@ -56,7 +58,7 @@ var SHEETS = {
   紀錄: ['時間', '帳號', '動作', '說明'],
   請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
-  加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒']
+  加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '補償方式']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
 
@@ -237,7 +239,7 @@ var ACTIONS = {
     var s = auth_(r.token, 'emp');
     var emp = otAllowed_(s.id);
     var date = normDate_(r.date), st = String(r.start || ''), en = String(r.end || ''), kind = String(r.kind || '平日');
-    var reason = String(r.reason || '').trim();
+    var reason = String(r.reason || '').trim(), comp = r.comp === '補休' ? '補休' : '加班費';
     if (!date) throw new Error('請填加班日期');
     if (OT_KINDS.indexOf(kind) < 0) throw new Error('請選擇加班類別');
     var a = hm_(st), b = hm_(en);
@@ -255,9 +257,9 @@ var ACTIONS = {
       var ym = date.slice(0, 7), month = info.list.filter(function (x) { return x.date.slice(0, 7) === ym && (x.status === '審核中' || x.status === '已核准'); }).reduce(function (t, x) { return t + x.hours; }, 0);
       if (month + hours > APP.OVERTIME_MONTH_LIMIT) warn = ym + ' 加班累計 ' + (month + hours) + ' 小時，超過每月 ' + APP.OVERTIME_MONTH_LIMIT + ' 小時上限（仍可送出，由人事審核決定）';
       var id = 'O' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
-      sheet_('加班').appendRow([id, emp.empNo, emp.name, date, st, en, hours, kind, reason, '審核中', now_(), '', '', '', warn]);
+      sheet_('加班').appendRow([id, emp.empNo, emp.name, date, st, en, hours, kind, reason, '審核中', now_(), '', '', '', warn, comp]);
     } finally { lock.releaseLock(); }
-    log_(emp.empNo, '申請加班', kind + ' ' + date + ' ' + hours + 'h');
+    log_(emp.empNo, '申請加班', kind + ' ' + date + ' ' + hours + 'h（' + comp + '）');
     return { ok: true, data: otInfo_(s.id), warning: warn };
   },
 
@@ -751,7 +753,7 @@ function leaveInfo_(emp, excludeId) {
   var ovUsed = Math.max(0, mc.used - free), ovAll = Math.max(0, mc.used + mc.pending - free);
   Object.keys(LEAVE_TYPES).forEach(function (ty) {
     var c = LEAVE_TYPES[ty];
-    if (ty === '特休' || c.countsAs) return;
+    if (ty === '特休' || c.countsAs || c.comp) return;
     var t = sum(ty, Y0, Y1), rule = '曆年制（' + Y0 + '～' + Y1 + '）';
     if (ty === '病假' && ovAll) { t.used += ovUsed; t.pending += ovAll - ovUsed; rule += '；含生理假超過 ' + free + ' 小時併入 ' + ovAll + ' 小時'; }
     if (ty === '生理假') {
@@ -760,11 +762,24 @@ function leaveInfo_(emp, excludeId) {
     }
     if (c.days || t.used || t.pending) out.balances.push({ type: ty, rule: rule, from: Y0, to: Y1, quota: c.days ? c.days * H : null, used: t.used, pending: t.pending });
   });
+  // 補休：額度不分年度，累計已核准的「加班換補休」時數，扣掉已請與審核中的補休
+  var compOk = compAllowed_(emp.empNo);
+  if (compOk || emp.adminView) {
+    var ct = sum('補休', '1900/01/01', '2999/12/31'), earned = compEarned_(emp.empNo);
+    if (compOk || earned || ct.used || ct.pending) out.balances.push({ type: '補休', rule: '加班換補休累計已核准 ' + earned + ' 小時，不分年度、不限期（請在期限內休完）', from: '', to: '', quota: earned, used: ct.used, pending: ct.pending });
+  }
+  if (!compOk && !emp.adminView) out.types = out.types.filter(function (t) { return t !== '補休'; });
   return out;
 }
 function checkQuota_(info, type, days, perDay) {
   var c = LEAVE_TYPES[type], base = c.countsAs || type, H = info.dayHours;
   var b = info.balances.filter(function (x) { return x.type === base; })[0];
+  if (c.comp) {
+    if (!compAllowed_(info.emp.empNo) && !info.emp.adminView) throw new Error('你的帳號沒有開放補休');
+    var needC = days.length * perDay, left = b ? b.quota - b.used - b.pending : 0;
+    if (needC > left) throw new Error('補休剩餘 ' + Math.max(0, left) + ' 小時，本次申請 ' + needC + ' 小時，不足');
+    return '';
+  }
   if (type === '特休') {
     if (!b || b.quota == null) throw new Error('查不到你的到職日，暫時無法申請特休，請洽人事');
     days.forEach(function (d) { if (d < b.from || d > b.to) throw new Error('特休請在本週年期間（' + b.from + '～' + b.to + '）內申請'); });
@@ -822,10 +837,17 @@ function otSplit_(h, kind) {
   if (kind === '休息日') return seg(0, 2, '1–2 小時 ×1.34').concat(seg(2, 8, '3–8 小時 ×1.67')).concat(seg(8, 12, '9–12 小時 ×2.67'));
   return seg(0, 8, '8 小時內 加倍發給').concat(seg(8, 10, '第 9–10 小時 ×1.34')).concat(seg(10, 12, '第 11–12 小時 ×1.67'));
 }
+function compAllowed_(empNo) { return APP.OVERTIME_EMP.indexOf(String(empNo)) >= 0; }
+/* 已核准且選擇「補休」的加班時數合計 */
+function compEarned_(empNo) {
+  var data = sheet_('加班').getDataRange().getValues(), t = 0;
+  for (var i = 1; i < data.length; i++) if (String(data[i][1]) === String(empNo) && data[i][9] === '已核准' && String(data[i][15]) === '補休') t += +data[i][6];
+  return t;
+}
 function otRow_(x) {
   var h = +x[6], k = String(x[7]);
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], date: normDate_(x[3]), start: String(x[4]), end: String(x[5]), hours: h, kind: k, reason: x[8],
-    status: x[9], appliedAt: ts_(x[10]), reviewer: x[11], reviewedAt: ts_(x[12]), note: x[13], warning: x[14] || '', split: otSplit_(h, k) };
+    status: x[9], appliedAt: ts_(x[10]), reviewer: x[11], reviewedAt: ts_(x[12]), note: x[13], warning: x[14] || '', split: otSplit_(h, k), comp: String(x[15]) === '補休' ? '補休' : '加班費' };
 }
 function otInfo_(empNo) {
   var data = sheet_('加班').getDataRange().getValues(), list = [];
@@ -892,6 +914,7 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
   var type = String(r.type || ''), start = normDate_(r.start), end = normDate_(r.end || r.start);
   var st = String(r.startTime || ''), en = String(r.endTime || ''), reason = String(r.reason || '').trim();
   if (!LEAVE_TYPES[type]) throw new Error('請選擇假別');
+  if (LEAVE_TYPES[type].comp && !compAllowed_(emp.empNo) && !byAdmin) throw new Error('你的帳號沒有開放補休');
   if (!start || !end) throw new Error('請填請假日期');
   if (end < start) throw new Error('結束日不能早於開始日');
   var whole = r.mode === 'day';
