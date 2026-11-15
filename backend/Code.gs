@@ -58,7 +58,8 @@ var SHEETS = {
   紀錄: ['時間', '帳號', '動作', '說明'],
   請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
-  打卡: ['東慧員編', '姓名', '日期', '上班', '下班', '工時', '上班裝置', '下班裝置', '備註', '修改紀錄'],
+  打卡: ['東慧員編', '姓名', '日期', '上班', '下班', '工時', '上班裝置', '下班裝置', '備註', '修改紀錄', '上班定位', '下班定位'],
+  打卡地點: ['地點ID', '名稱', '緯度', '經度', '半徑(公尺)', '啟用'],
   加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '補償方式']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
@@ -239,6 +240,8 @@ var ACTIONS = {
     var s = auth_(r.token, 'emp');
     var emp = clockEmp_(s.id), kind = r.kind === 'out' ? 'out' : 'in';
     var ua = String(r.device || '').slice(0, 120), now = new Date();
+    var g = gpsCheck_(r.lat, r.lng);   // 比照 hr-system：需在打卡地點範圍內
+    if (!g.ok) { log_(emp.empNo, '打卡失敗', (kind === 'in' ? '上班' : '下班') + ' ' + g.text); throw new Error(g.error); }
     var today = fmt_(now), hm = Utilities.formatDate(now, 'Asia/Taipei', 'HH:mm'), msg;
     var lock = LockService.getScriptLock(); lock.waitLock(30000);
     try {
@@ -254,9 +257,10 @@ var ACTIONS = {
         if (rowToday >= 0) {
           var oT = tm_(data[rowToday][4]);
           sh.getRange(rowToday + 1, 4, 1, 4).setValues([[hm, oT, oT && oT > hm ? clockHours_(today, hm, today, oT) : '', ua]]);
+          sh.getRange(rowToday + 1, 11).setValue(g.text);
         }
-        else sh.appendRow([emp.empNo, emp.name, today, hm, '', '', ua, '', '', '']);
-        msg = '上班打卡成功：' + today + ' ' + hm;
+        else sh.appendRow([emp.empNo, emp.name, today, hm, '', '', ua, '', '', '', g.text, '']);
+        msg = '上班打卡成功：' + today + ' ' + hm + '（' + g.place + '）';
       } else {
         var row = -1;
         if (rowOpen >= 0) {   // 有上班卡、還沒下班卡（夜班可接前一天，16 小時內）
@@ -267,16 +271,46 @@ var ACTIONS = {
         if (row >= 0) {
           var d0 = normDate_(data[row][2]), inT = tm_(data[row][3]), old = tm_(data[row][4]);
           sh.getRange(row + 1, 5, 1, 4).setValues([[hm, inT ? clockHours_(d0, inT, today, hm) : '', data[row][6], ua]]);
+          sh.getRange(row + 1, 12).setValue(g.text);
           if (old) sh.getRange(row + 1, 10).setValue((data[row][9] ? data[row][9] + '\n' : '') + now_() + ' 重打下班卡（原 ' + old + '）');
-          msg = '下班打卡成功：' + today + ' ' + hm + (d0 !== today ? '（接 ' + d0 + ' 的上班卡）' : '');
+          msg = '下班打卡成功：' + today + ' ' + hm + '（' + g.place + '）' + (d0 !== today ? '，接 ' + d0 + ' 的上班卡' : '');
         } else {
-          sh.appendRow([emp.empNo, emp.name, today, '', hm, '', '', ua, '未打上班卡', '']);
+          sh.appendRow([emp.empNo, emp.name, today, '', hm, '', '', ua, '未打上班卡', '', '', g.text]);
           msg = '下班打卡成功：' + today + ' ' + hm + '（今天沒有上班卡，請洽人事補登）';
         }
       }
     } finally { lock.releaseLock(); }
     log_(emp.empNo, kind === 'in' ? '上班打卡' : '下班打卡', today + ' ' + hm);
     return { ok: true, message: msg, data: clockInfo_(emp) };
+  },
+
+  clockLocations: function (r) {
+    auth_(r.token, 'emp');
+    return { ok: true, list: locList_().filter(function (l) { return l.active; }) };
+  },
+
+  adminLocations: function (r) { auth_(r.token, 'admin'); return { ok: true, list: locList_() }; },
+
+  adminSaveLocation: function (r) {
+    var s = auth_(r.token, 'admin');
+    var lat = Number(r.lat), lng = Number(r.lng), radius = Number(r.radius), name = String(r.name || '').trim();
+    if (!name) throw new Error('請輸入地點名稱');
+    if (!isFinite(lat) || !isFinite(lng) || r.lat === '' || r.lng === '' || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('經緯度無效');
+    if (!(radius >= 10 && radius <= 5000)) throw new Error('半徑需介於 10～5000 公尺');
+    var sh = sheet_('打卡地點'), data = sh.getDataRange().getValues(), id = String(r.id || ''), row = -1;
+    for (var i = 1; i < data.length; i++) if (id && String(data[i][0]) === id) row = i;
+    if (!id) id = 'LOC' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss');
+    var rec = [id, name, lat, lng, radius, r.active === false ? '停用' : '啟用'];
+    if (row >= 0) sh.getRange(row + 1, 1, 1, 6).setValues([rec]); else sh.appendRow(rec);
+    log_(s.id, '儲存打卡地點', name + ' ' + radius + 'm');
+    return { ok: true, list: locList_() };
+  },
+
+  adminDeleteLocation: function (r) {
+    var s = auth_(r.token, 'admin');
+    var sh = sheet_('打卡地點'), data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) if (String(data[i][0]) === String(r.id)) { sh.deleteRow(i + 1); log_(s.id, '刪除打卡地點', data[i][1]); return { ok: true, list: locList_() }; }
+    throw new Error('找不到地點');
   },
 
   adminClocks: function (r) {
@@ -911,7 +945,30 @@ function tm_(v) { if (!v) return ''; if (v instanceof Date) return Utilities.for
 function clockMins_(d1, t1, d2, t2) { return Math.round((toDate_(d2).getTime() - toDate_(d1).getTime()) / 6e4) + hm_(t2) - hm_(t1); }
 function clockHours_(d1, t1, d2, t2) { return Math.round(clockMins_(d1, t1, d2, t2) / 60 * 100) / 100; }
 function clockRow_(x) {
-  return { empNo: String(x[0]), name: x[1], date: normDate_(x[2]), in: tm_(x[3]), out: tm_(x[4]), hours: x[5] === '' ? '' : +x[5], note: String(x[8] || ''), edits: String(x[9] || '') };
+  return { empNo: String(x[0]), name: x[1], date: normDate_(x[2]), in: tm_(x[3]), out: tm_(x[4]), hours: x[5] === '' ? '' : +x[5], note: String(x[8] || ''), edits: String(x[9] || ''),
+    inGps: String(x[10] || ''), outGps: String(x[11] || '') };
+}
+/* 打卡地點（GPS 定點，比照 hr-system） */
+function locList_() {
+  return sheet_('打卡地點').getDataRange().getValues().slice(1).filter(function (x) { return x[0]; }).map(function (x) {
+    return { id: String(x[0]), name: String(x[1]), lat: Number(x[2]), lng: Number(x[3]), radius: Number(x[4]), active: String(x[5]) !== '停用' };
+  });
+}
+function distance_(lat1, lon1, lat2, lon2) {
+  var R = 6371000, rad = Math.PI / 180, dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function gpsCheck_(la, ln) {
+  var lat = Number(la), lng = Number(ln);
+  if (la === undefined || la === null || la === '' || !isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
+    return { ok: false, error: '取不到定位，請允許瀏覽器使用位置後再打卡', text: '無定位' };
+  var best = null;
+  locList_().forEach(function (l) { if (!l.active) return; var d = distance_(lat, lng, l.lat, l.lng); if (!best || d < best.d) best = { d: d, l: l }; });
+  if (!best) return { ok: false, error: '尚未設定打卡地點，請洽人事', text: '未設定地點' };
+  var dist = Math.round(best.d), text = best.l.name + ' ' + dist + 'm（' + lat.toFixed(6) + ',' + lng.toFixed(6) + '）';
+  if (dist > best.l.radius) return { ok: false, error: '距離「' + best.l.name + '」' + dist + ' 公尺，超出打卡範圍（' + best.l.radius + ' 公尺）', text: text + ' 超出範圍' };
+  return { ok: true, place: best.l.name, dist: dist, text: text };
 }
 function clockInfo_(emp) {
   var now = new Date(), today = fmt_(now), ym = today.slice(0, 7), prevYm = fmt_(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);

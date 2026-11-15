@@ -141,9 +141,30 @@
   function empTabs() { var t = [['pay', '薪資・出勤']]; if (canLeave()) t.push(['leave', '請假']); if (state.emp && state.emp.clock) t.push(['clock', '打卡']); if (state.emp && state.emp.overtime) t.push(['ot', '報加班']); return t; }
 
   /* ───────── 上下班打卡 ───────── */
+  function haversine(a, b, c, d) {
+    var R = 6371000, r = Math.PI / 180, dl = (c - a) * r, dn = (d - b) * r;
+    var x = Math.sin(dl / 2) * Math.sin(dl / 2) + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dn / 2) * Math.sin(dn / 2);
+    return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+  function getPosition() {
+    return new Promise(function (resolve, reject) {
+      if (!navigator.geolocation) return reject(new Error('此瀏覽器不支援定位'));
+      navigator.geolocation.getCurrentPosition(resolve, function (err) {
+        reject(new Error(err.code === 1 ? '定位權限被拒絕，請在瀏覽器設定中允許定位' : '無法取得定位，請到空曠處重試'));
+      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    });
+  }
+  function geocode(q) {
+    var wait = 1100 - (Date.now() - (geocode.last || 0));   // OSM 每秒最多 1 次
+    return new Promise(function (r) { setTimeout(r, Math.max(0, wait)); }).then(function () {
+      geocode.last = Date.now();
+      return fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=tw&accept-language=zh-TW&q=' + encodeURIComponent(q));
+    }).then(function (res) { if (!res.ok) throw new Error('地點搜尋服務暫時無法使用，請手動輸入座標'); return res.json(); })
+      .then(function (j) { return j.map(function (x) { return { name: x.display_name, lat: Number(x.lat), lng: Number(x.lon) }; }); });
+  }
   function viewClock(body) {
     body.innerHTML = '<div class="empty">讀取中…</div>';
-    api('myClock', { token: state.emp.token }).then(function (j) { renderClock(body, j.data); })
+    Promise.all([api('myClock', { token: state.emp.token }), api('clockLocations', { token: state.emp.token })]).then(function (r) { state.clockLocs = r[1].list; renderClock(body, r[0].data); })
       .catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
   }
   function renderClock(body, d) {
@@ -152,22 +173,41 @@
       t && t.in && t.out ? '今天已下班' : t && t.in ? '上班中（' + esc(t.in) + ' 上班）' : '今天還沒打上班卡';
     body.innerHTML = '<div class="card" style="text-align:center">' +
       '<div class="muted small">' + esc(d.today) + '</div><div id="clk" style="font-size:44px;font-weight:700;letter-spacing:2px;margin:6px 0">' + esc(d.now) + '</div>' +
-      '<div style="margin-bottom:14px">' + status + '</div>' +
+      '<div style="margin-bottom:6px">' + status + '</div>' +
+      '<div class="small" id="geo" style="margin-bottom:12px">定位中…</div>' +
       '<div class="row" style="justify-content:center;gap:14px">' +
-      '<button class="btn primary" id="pin" style="min-width:130px;padding:14px 18px;font-size:17px"' + (t && t.in ? ' disabled' : '') + '>上班打卡</button>' +
-      '<button class="btn" id="pout" style="min-width:130px;padding:14px 18px;font-size:17px">下班打卡</button></div>' +
+      '<button class="btn primary" id="pin" style="min-width:130px;padding:14px 18px;font-size:17px" disabled>上班打卡</button>' +
+      '<button class="btn" id="pout" style="min-width:130px;padding:14px 18px;font-size:17px" disabled>下班打卡</button></div>' +
+      '<div style="margin-top:8px"><button class="btn sm" id="ploc">重新定位</button></div>' +
       '<div class="muted small" style="margin-top:12px">' + (t ? '今天：上班 ' + (t.in || '—') + '・下班 ' + (t.out || '—') : '') + '</div>' +
-      '<div class="muted small">打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
+      '<div class="muted small">需在打卡地點範圍內才能打卡（可打卡地點：' + ((state.clockLocs || []).map(function (l) { return esc(l.name) + ' ' + l.radius + ' 公尺'; }).join('、') || '尚未設定') + '）。打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
       '<h3 style="margin:18px 0 10px">打卡紀錄（本月與上月）<span class="muted small" style="font-weight:400">　本月合計 ' + d.monthHours + ' 小時</span></h3>' +
       (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>上班</th><th>下班</th><th class="r">時數</th><th>備註</th></tr></thead><tbody>' +
-        d.list.map(function (x) { return '<tr><td>' + esc(x.date) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + '</td><td>' + (esc(x.out) || '<span class="muted">—</span>') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td><td class="small">' + esc(x.note) + '</td></tr>'; }).join('') +
+        d.list.map(function (x) { return '<tr><td>' + esc(x.date) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + (x.inGps ? '<br><span class="muted small">' + esc(x.inGps.replace(/（.*）/, '')) + '</span>' : '') + '</td><td>' + (esc(x.out) || '<span class="muted">—</span>') + (x.outGps ? '<br><span class="muted small">' + esc(x.outGps.replace(/（.*）/, '')) + '</span>' : '') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td><td class="small">' + esc(x.note) + '</td></tr>'; }).join('') +
         '</tbody></table></div>' : '<div class="empty">還沒有打卡紀錄。</div>');
     var tick = setInterval(function () { var el = document.getElementById('clk'); if (!el) return clearInterval(tick); var n = new Date(); el.textContent = ('0' + n.getHours()).slice(-2) + ':' + ('0' + n.getMinutes()).slice(-2) + ':' + ('0' + n.getSeconds()).slice(-2); }, 1000);
+    var pos = null;
+    function refreshBtns() { document.getElementById('pin').disabled = !pos || !!(t && t.in); document.getElementById('pout').disabled = !pos; }
+    function locate() {
+      var g = document.getElementById('geo'); g.textContent = '定位中…'; pos = null; refreshBtns();
+      getPosition().then(function (p) {
+        pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
+        var near = null;
+        (state.clockLocs || []).forEach(function (l) { var dd = haversine(pos.lat, pos.lng, l.lat, l.lng); if (!near || dd < near.d) near = { d: dd, l: l }; });
+        g.innerHTML = near ? '定位精準度約 ' + Math.round(pos.acc) + ' 公尺。距離「' + esc(near.l.name) + '」' + Math.round(near.d) + ' 公尺 — ' +
+          (near.d <= near.l.radius ? '<span class="badge green">在範圍內</span>' : '<span class="badge red">超出範圍</span>') : '<span style="color:var(--bad)">尚未設定打卡地點，請洽人事</span>';
+        refreshBtns();
+      }).catch(function (e) { g.innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>'; });
+    }
+    document.getElementById('ploc').onclick = locate;
+    locate();
     function go(kind) {
       var label = kind === 'in' ? '上班' : '下班';
       confirmBox('確定打<b>' + label + '卡</b>？', label + '打卡').then(function (ok) {
         if (!ok) return;
-        api('punch', { token: state.emp.token, kind: kind, device: navigator.userAgent }).then(function (j) {
+        getPosition().then(function (p) {   // 打卡當下重新定位
+          return api('punch', { token: state.emp.token, kind: kind, device: navigator.userAgent, lat: p.coords.latitude, lng: p.coords.longitude });
+        }).then(function (j) {
           renderClock(body, j.data);
           modal('<div class="msg ok">' + esc(j.message) + '</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>');
         }).catch(function (e) { alertMsg(e.message); });
@@ -780,11 +820,11 @@
       state.clockMonth = j.month;
       var tot = {}; j.list.forEach(function (x) { if (x.hours !== '') tot[x.name] = Math.round(((tot[x.name] || 0) + x.hours) * 100) / 100; });
       body.innerHTML = '<div class="row" style="margin-bottom:12px"><label class="field" style="margin:0"><span>月份</span><input type="month" id="cm" value="' + esc(j.month.replace('/', '-')) + '"></label>' +
-        '<button class="btn" id="cadd">補登打卡</button><span class="muted small">' + Object.keys(tot).map(function (k) { return esc(k) + ' 本月 ' + tot[k] + ' 小時'; }).join('　') + '</span></div>' +
+        '<button class="btn" id="cadd">補登打卡</button><button class="btn" id="clocs">打卡地點</button><span class="muted small">' + Object.keys(tot).map(function (k) { return esc(k) + ' 本月 ' + tot[k] + ' 小時'; }).join('　') + '</span></div>' +
         (j.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>姓名</th><th>上班</th><th>下班</th><th class="r">時數</th><th>備註</th><th></th></tr></thead><tbody>' +
           j.list.map(function (x, i) {
             return '<tr><td>' + esc(x.date) + '</td><td>' + esc(x.name) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + '</td><td>' + (esc(x.out) || '<span style="color:var(--bad)">未打</span>') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td>' +
-              '<td class="small">' + esc(x.note) + (x.edits ? '<details class="muted"><summary>異動紀錄</summary>' + x.edits.split('\n').map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') + '</details>' : '') + '</td>' +
+              '<td class="small">' + (x.inGps ? '<div class="muted">上班：' + esc(x.inGps) + '</div>' : '') + (x.outGps ? '<div class="muted">下班：' + esc(x.outGps) + '</div>' : '') + esc(x.note) + (x.edits ? '<details class="muted"><summary>異動紀錄</summary>' + x.edits.split('\n').map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') + '</details>' : '') + '</td>' +
               '<td><button class="btn sm" data-ce="' + i + '">修改</button></td></tr>';
           }).join('') + '</tbody></table></div>' : '<div class="empty">這個月沒有打卡紀錄。</div>');
       document.getElementById('cm').onchange = function () { state.clockMonth = this.value.replace('-', '/'); adminClocks(body); };
@@ -803,8 +843,66 @@
         });
       }
       document.getElementById('cadd').onclick = function () { edit(null); };
+      document.getElementById('clocs').onclick = function () { adminLocations(body); };
       body.querySelectorAll('[data-ce]').forEach(function (b) { b.onclick = function () { edit(j.list[+b.dataset.ce]); }; });
     }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+  }
+
+  function adminLocations(body) {
+    body.innerHTML = '<div class="empty">讀取中…</div>';
+    api('adminLocations', { token: state.admin.token }).then(function (j) { drawLocs(j.list); }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+    function drawLocs(list) {
+      body.innerHTML = '<div class="row" style="margin-bottom:12px"><button class="btn" id="lback">← 回打卡紀錄</button><b>打卡地點（GPS 定點）</b><button class="btn primary" id="ladd">新增地點</button></div>' +
+        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>名稱</th><th>緯度</th><th>經度</th><th class="r">半徑（公尺）</th><th>狀態</th><th></th></tr></thead><tbody>' +
+          list.map(function (l, i) {
+            return '<tr><td>' + esc(l.name) + '<br><a class="small" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + encodeURIComponent(l.lat + ',' + l.lng) + '">地圖</a></td><td>' + l.lat + '</td><td>' + l.lng + '</td><td class="r">' + l.radius + '</td><td>' + (l.active ? '<span class="badge green">啟用</span>' : '<span class="badge">停用</span>') + '</td>' +
+              '<td class="row" style="flex-wrap:nowrap"><button class="btn sm" data-le="' + i + '">編輯</button><button class="btn sm danger" data-ld="' + i + '">刪除</button></td></tr>';
+          }).join('') + '</tbody></table></div>' : '<div class="empty">尚未設定打卡地點。沒有地點時員工無法打卡。</div>') +
+        '<div class="muted small" style="margin-top:8px">新增時輸入名稱或地址按「搜尋座標」自動帶入；也可在現場按「使用目前位置」。儲存前請用地圖連結確認位置。員工必須在半徑範圍內才能打卡。</div>';
+      document.getElementById('lback').onclick = function () { adminClocks(body); };
+      document.getElementById('ladd').onclick = function () { form(null); };
+      body.querySelectorAll('[data-le]').forEach(function (b) { b.onclick = function () { form(list[+b.dataset.le]); }; });
+      body.querySelectorAll('[data-ld]').forEach(function (b) {
+        b.onclick = function () {
+          var l = list[+b.dataset.ld];
+          confirmBox('刪除打卡地點「' + esc(l.name) + '」？', '刪除', true).then(function (ok) {
+            if (ok) api('adminDeleteLocation', { token: state.admin.token, id: l.id }).then(function (j) { drawLocs(j.list); }).catch(function (e) { alertMsg(e.message); });
+          });
+        };
+      });
+    }
+    function form(l) {
+      var isNew = !l; l = l || { name: '', lat: '', lng: '', radius: 100, active: true };
+      modal('<b>' + (isNew ? '新增打卡地點' : '編輯打卡地點') + '</b>' +
+        '<label class="field"><span>地點名稱</span><input id="l_name" value="' + esc(l.name) + '" placeholder="例如：寶雅 岡山物流中心"></label>' +
+        '<label class="field"><span>地址／搜尋關鍵字（選填，留空用名稱搜尋）</span><div class="row"><input id="l_q" style="flex:1"><button class="btn" id="l_find">搜尋座標</button></div></label>' +
+        '<div id="l_res" class="small"></div>' +
+        '<div class="row"><label class="field" style="flex:1"><span>緯度</span><input id="l_lat" type="number" step="any" value="' + esc(l.lat) + '"></label><label class="field" style="flex:1"><span>經度</span><input id="l_lng" type="number" step="any" value="' + esc(l.lng) + '"></label></div>' +
+        '<div id="l_chk" class="small muted"></div>' +
+        '<div class="row"><label class="field" style="flex:1"><span>允許半徑（公尺）</span><input id="l_rad" type="number" min="10" max="5000" value="' + esc(l.radius) + '"></label>' +
+        '<label class="field" style="flex:1"><span>狀態</span><select id="l_act"><option value="1"' + (l.active ? ' selected' : '') + '>啟用</option><option value="0"' + (!l.active ? ' selected' : '') + '>停用</option></select></label></div>' +
+        '<div class="row" style="justify-content:space-between"><button class="btn" id="l_here">使用目前位置</button><span><button class="btn" data-close>取消</button> <button class="btn primary" id="l_ok">儲存</button></span></div>', function (m, close) {
+        var q = function (id) { return m.querySelector('#' + id); };
+        function showCoord() { var la = q('l_lat').value, ln = q('l_lng').value; q('l_chk').innerHTML = la && ln ? '座標：' + esc(la) + ', ' + esc(ln) + ' — <a target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + encodeURIComponent(la + ',' + ln) + '">在地圖上確認位置</a>' : ''; }
+        function pick(c) { q('l_lat').value = Number(c.lat).toFixed(6); q('l_lng').value = Number(c.lng).toFixed(6); q('l_res').innerHTML = ''; showCoord(); }
+        q('l_lat').oninput = q('l_lng').oninput = showCoord; showCoord();
+        q('l_find').onclick = function () {
+          var s = (q('l_q').value || q('l_name').value).trim(); if (!s) return alertMsg('請先輸入地點名稱或地址');
+          q('l_res').innerHTML = '<span class="muted">搜尋中…</span>';
+          geocode(s).then(function (list) {
+            if (!list.length) { q('l_res').innerHTML = '<span style="color:var(--bad)">找不到</span>，請改用更完整的地址，或手動輸入座標'; return; }
+            if (list.length === 1) return pick(list[0]);
+            q('l_res').innerHTML = '<div class="muted">找到多個結果，請選擇：</div>' + list.map(function (c, i) { return '<div style="margin-top:4px"><button class="btn sm" data-pk="' + i + '">選擇</button> ' + esc(c.name) + '</div>'; }).join('');
+            q('l_res').querySelectorAll('[data-pk]').forEach(function (b) { b.onclick = function () { pick(list[+b.dataset.pk]); }; });
+          }).catch(function (e) { q('l_res').innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>'; });
+        };
+        q('l_here').onclick = function () { getPosition().then(function (p) { pick({ lat: p.coords.latitude, lng: p.coords.longitude }); }).catch(function (e) { alertMsg(e.message); }); };
+        q('l_ok').onclick = function () {
+          api('adminSaveLocation', { token: state.admin.token, id: l.id, name: q('l_name').value, lat: q('l_lat').value, lng: q('l_lng').value, radius: q('l_rad').value, active: q('l_act').value === '1' })
+            .then(function (j) { close(); drawLocs(j.list); }).catch(function (e) { alertMsg(e.message); });
+        };
+      });
+    }
   }
 
   function adminLogs(body) {
