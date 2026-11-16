@@ -317,6 +317,46 @@ var ACTIONS = {
     return { ok: true, list: res.results.slice(0, 5).map(function (x) { return { name: x.formatted_address, lat: x.geometry.location.lat, lng: x.geometry.location.lng }; }) };
   },
 
+  /* 差假查詢：依期間、員工、假別列出逐日請假（出勤紀錄＞請假調整＞線上申請，同日同假別不重複） */
+  adminLeaveQuery: function (r) {
+    auth_(r.token, 'admin');
+    var from = normDate_(r.from) || fmt_(new Date()).slice(0, 8) + '01', to = normDate_(r.to) || fmt_(new Date());
+    var who = String(r.empNo || ''), type = String(r.type || '');
+    var names = {}, emps = [];
+    db_().getSheetByName('員工').getDataRange().getValues().slice(1).forEach(function (x) {
+      names[String(x[0])] = x[2];
+      if (String(x[3]) === APP.LEAVE_CATEGORY || APP.OVERTIME_EMP.indexOf(String(x[0])) >= 0) emps.push({ empNo: String(x[0]), name: x[2] });
+    });
+    var rec = {};   // empNo|date|type -> {hours, src, note}
+    function ok(e, d, t) { return d >= from && d <= to && (!who || e === who) && (!type || t === type); }
+    db_().getSheetByName('出勤明細').getDataRange().getValues().slice(1).forEach(function (x) {
+      var e = String(x[1]), d = normDate_(x[2]), t = String(x[8] || '').trim();
+      if (!t || !(+x[9] > 0) || !ok(e, d, t)) return;
+      rec[e + '|' + d + '|' + t] = { hours: +x[9], src: '出勤紀錄', note: String(x[0]) };
+    });
+    sheet_('請假調整').getDataRange().getValues().slice(1).forEach(function (x, j) {
+      var e = String(x[0]), d = normDate_(x[2]), t = String(x[1] || '').trim(), k = e + '|' + d + '|' + t;
+      if (!d || !(+x[3] > 0) || !ok(e, d, t)) return;
+      if (!rec[k]) rec[k] = { hours: +x[3], src: '補登', note: String(x[4] || '') };
+      else if (rec[k].src === '補登') rec[k + '|' + j] = { hours: +x[3], src: '補登', note: String(x[4] || '') };
+    });
+    sheet_('請假').getDataRange().getValues().slice(1).forEach(function (x) {
+      var a = leaveRow_(x);
+      if (a.status !== '已核准' && a.status !== '審核中') return;
+      dateRange_(a.start, a.end).forEach(function (d) {
+        var k = a.empNo + '|' + d + '|' + a.type;
+        if (!ok(a.empNo, d, a.type) || rec[k]) return;
+        rec[k] = { hours: a.perDay, src: '線上申請（' + a.status + '）', note: (a.startTime === '整天' ? '整天' : a.startTime ? a.startTime + '–' + a.endTime : '') + (a.reason ? '　' + a.reason : '') };
+      });
+    });
+    var list = Object.keys(rec).map(function (k) {
+      var p = k.split('|'), v = rec[k];
+      return { empNo: p[0], name: names[p[0]] || p[0], date: p[1], type: p[2], hours: v.hours, src: v.src, note: v.note };
+    });
+    list.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.empNo < b.empNo ? -1 : 1); });
+    return { ok: true, from: from, to: to, list: list, emps: emps, types: Object.keys(LEAVE_TYPES) };
+  },
+
   adminDeleteLocation: function (r) {
     var s = auth_(r.token, 'admin');
     var sh = sheet_('打卡地點'), data = sh.getDataRange().getValues();
@@ -806,7 +846,7 @@ function leaveEmp_(empNo, adminView) {
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
     status: x[9], appliedAt: ts_(x[10]), reviewer: x[11], reviewedAt: ts_(x[12]), note: x[13], warning: x[14] || '',
-    startTime: String(x[15] || ''), endTime: String(x[16] || ''), proofId: String(x[17] || ''), proofName: String(x[18] || ''), edits: String(x[19] || '') };
+    startTime: String(x[15]) === '整天' ? '整天' : tm_(x[15]), endTime: tm_(x[16]), proofId: String(x[17] || ''), proofName: String(x[18] || ''), edits: String(x[19] || '') };
 }
 
 /* 彙整：已休 = 出勤明細的請假（優先）＋「請假調整」的逐日紀錄（同日同假別不重複）＋ 已核准、尚未出現在出勤紀錄的申請 */

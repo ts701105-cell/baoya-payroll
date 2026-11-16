@@ -520,14 +520,14 @@
   /* ───────── 管理員 ───────── */
   function viewAdmin() {
     var a = state.admin;
-    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['ots', '加班審核'], ['clocks', '打卡紀錄'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
+    var tabs = [['upload', '上傳附表'], ['periods', '月份與發布'], ['leaves', '請假審核'], ['lq', '差假查詢'], ['ots', '加班審核'], ['clocks', '打卡紀錄'], ['emps', '員工帳號'], ['logs', '操作紀錄']];
     $app.innerHTML = bar('<div class="who"><b>' + esc(a.name || '管理員') + '</b><br><span class="muted small">管理後台</span></div><button class="btn sm" id="apw">改密碼</button><button class="btn sm" id="aout">登出</button>') +
       '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (state.adminTab === t[0] ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div><div id="abody"></div>';
     document.getElementById('aout').onclick = function () { state.admin = null; store('admin', null); route(); };
     document.getElementById('apw').onclick = function () { viewChangePw(true, true); };
     $app.querySelectorAll('.tab').forEach(function (b) { b.onclick = function () { state.adminTab = b.dataset.t; viewAdmin(); }; });
     var body = document.getElementById('abody');
-    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, ots: adminOvertimes, clocks: adminClocks, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
+    ({ upload: adminUpload, periods: adminPeriods, leaves: adminLeaves, lq: adminLeaveQuery, ots: adminOvertimes, clocks: adminClocks, emps: adminEmps, logs: adminLogs })[state.adminTab](body);
   }
 
   function adminUpload(body) {
@@ -911,6 +911,43 @@
         };
       });
     }
+  }
+
+  function adminLeaveQuery(body) {
+    var q = state.lq || (function () { var n = new Date(), p = function (x) { return ('0' + x).slice(-2); }; return { from: n.getFullYear() + '-' + p(n.getMonth() + 1) + '-01', to: n.getFullYear() + '-' + p(n.getMonth() + 1) + '-' + p(n.getDate()), empNo: '', type: '' }; })();
+    state.lq = q;
+    body.innerHTML = '<div class="empty">查詢中…</div>';
+    api('adminLeaveQuery', { token: state.admin.token, from: q.from, to: q.to, empNo: q.empNo, type: q.type }).then(function (j) {
+      var tot = {}, byType = {};
+      j.list.forEach(function (x) { var k = x.name + '|' + x.empNo; tot[k] = tot[k] || {}; tot[k][x.type] = Math.round(((tot[k][x.type] || 0) + x.hours) * 10) / 10; byType[x.type] = 1; });
+      var types = Object.keys(byType);
+      body.innerHTML = '<div class="card"><div class="row" style="align-items:flex-end;gap:10px;flex-wrap:wrap">' +
+        '<label class="field" style="margin:0"><span>起日</span><input type="date" id="lq_from" value="' + esc(q.from) + '"></label>' +
+        '<label class="field" style="margin:0"><span>迄日</span><input type="date" id="lq_to" value="' + esc(q.to) + '"></label>' +
+        '<label class="field" style="margin:0"><span>員工</span><select id="lq_emp"><option value="">全部</option>' + j.emps.map(function (e) { return '<option value="' + esc(e.empNo) + '"' + (e.empNo === q.empNo ? ' selected' : '') + '>' + esc(e.name) + '</option>'; }).join('') + '</select></label>' +
+        '<label class="field" style="margin:0"><span>假別</span><select id="lq_type"><option value="">全部</option>' + j.types.map(function (t) { return '<option' + (t === q.type ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') + '</select></label>' +
+        '<button class="btn primary" id="lq_go">查詢</button><button class="btn" id="lq_csv"' + (j.list.length ? '' : ' disabled') + '>下載 Excel（CSV）</button></div>' +
+        '<div class="row" style="margin-top:8px;gap:6px">' + [['本月', 0], ['上月', -1]].map(function (b) { return '<button class="chip" data-m="' + b[1] + '">' + b[0] + '</button>'; }).join('') + '<button class="chip" data-y="1">今年</button></div></div>' +
+        (j.list.length ? '<h3 style="margin:14px 0 8px">合計（' + esc(j.from) + '～' + esc(j.to) + '，單位：小時）</h3><div class="tbl-wrap"><table><thead><tr><th>姓名</th>' + types.map(function (t) { return '<th class="r">' + esc(t) + '</th>'; }).join('') + '<th class="r">合計</th></tr></thead><tbody>' +
+          Object.keys(tot).map(function (k) { var p = k.split('|'), sum = 0; return '<tr><td>' + esc(p[0]) + '<br><span class="muted small">' + esc(p[1]) + '</span></td>' + types.map(function (t) { var v = tot[k][t] || 0; sum += v; return '<td class="r">' + (v || '') + '</td>'; }).join('') + '<td class="r"><b>' + Math.round(sum * 10) / 10 + '</b></td></tr>'; }).join('') + '</tbody></table></div>' +
+          '<h3 style="margin:14px 0 8px">逐日明細（' + j.list.length + ' 筆）</h3><div class="tbl-wrap"><table><thead><tr><th>日期</th><th>姓名</th><th>假別</th><th class="r">時數</th><th>來源</th><th>說明</th></tr></thead><tbody>' +
+          j.list.map(function (x) { return '<tr><td>' + esc(x.date) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.type) + '</td><td class="r">' + x.hours + '</td><td class="small">' + esc(x.src) + '</td><td class="small muted">' + esc(x.note) + '</td></tr>'; }).join('') + '</tbody></table></div>'
+          : '<div class="empty">這段期間沒有請假紀錄。</div>') +
+        '<div class="muted small" style="margin-top:8px">來源：出勤紀錄＝已上傳的附表；補登＝系統上線前的請假（請假調整）；線上申請＝員工在網站送出的假單。同一天同假別只算一次，以出勤紀錄優先。</div>';
+      function go() { state.lq = { from: document.getElementById('lq_from').value, to: document.getElementById('lq_to').value, empNo: document.getElementById('lq_emp').value, type: document.getElementById('lq_type').value }; adminLeaveQuery(body); }
+      document.getElementById('lq_go').onclick = go;
+      body.querySelectorAll('[data-m]').forEach(function (b) { b.onclick = function () {
+        var n = new Date(), a = new Date(n.getFullYear(), n.getMonth() + (+b.dataset.m), 1), e = +b.dataset.m ? new Date(n.getFullYear(), n.getMonth(), 0) : n;
+        var f = function (d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); };
+        document.getElementById('lq_from').value = f(a); document.getElementById('lq_to').value = f(e); go(); }; });
+      body.querySelector('[data-y]').onclick = function () { var n = new Date(); document.getElementById('lq_from').value = n.getFullYear() + '-01-01'; document.getElementById('lq_to').value = n.getFullYear() + '-12-31'; go(); };
+      document.getElementById('lq_csv').onclick = function () {
+        var rows = [['日期', '員編', '姓名', '假別', '時數', '來源', '說明']].concat(j.list.map(function (x) { return [x.date, x.empNo, x.name, x.type, x.hours, x.src, x.note]; }));
+        var csv = '\ufeff' + rows.map(function (r) { return r.map(function (c) { c = String(c == null ? '' : c); return /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c; }).join(','); }).join('\r\n');
+        var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        a.download = '差假查詢_' + j.from.replace(/\//g, '') + '-' + j.to.replace(/\//g, '') + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+      };
+    }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
   }
 
   function adminLogs(body) {
