@@ -880,7 +880,7 @@
       });
     }
     function form(l) {
-      var isNew = !l; l = l || { name: '', lat: '', lng: '', radius: 100, active: true };
+      var isNew = !l; l = l || { name: '', lat: '', lng: '', radius: 300, active: true };
       modal('<b>' + (isNew ? '新增打卡地點' : '編輯打卡地點') + '</b>' +
         '<label class="field"><span>地點名稱</span><input id="l_name" value="' + esc(l.name) + '" placeholder="例如：寶雅 岡山物流中心"></label>' +
         '<label class="field"><span>地址／搜尋關鍵字（選填，留空用名稱搜尋）</span><div class="row"><input id="l_q" style="flex:1"><button class="btn" id="l_find">搜尋座標</button></div></label>' +
