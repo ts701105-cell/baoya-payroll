@@ -59,7 +59,7 @@ var SHEETS = {
   請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
   打卡: ['東慧員編', '姓名', '日期', '上班', '下班', '工時', '上班裝置', '下班裝置', '備註', '修改紀錄', '上班定位', '下班定位'],
-  打卡地點: ['地點ID', '名稱', '緯度', '經度', '半徑(公尺)', '啟用'],
+  打卡地點: ['地點ID', '名稱', '緯度', '經度', '半徑(公尺)', '啟用', '允許IP'],
   加班: ['申請編號', '東慧員編', '姓名', '日期', '開始', '結束', '時數', '類別', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '補償方式']
 };
 var SOURCE_NAME = { long: '長期', pt: 'PT' };
@@ -240,7 +240,7 @@ var ACTIONS = {
     var s = auth_(r.token, 'emp');
     var emp = clockEmp_(s.id), kind = r.kind === 'out' ? 'out' : 'in';
     var ua = String(r.device || '').slice(0, 120), now = new Date();
-    var g = gpsCheck_(r.lat, r.lng);   // 比照 hr-system：需在打卡地點範圍內
+    var g = punchCheck_(r);   // 比照 hr-system：QR、GPS 在範圍內、IP 在公司網路，任一通過即可
     if (!g.ok) { log_(emp.empNo, '打卡失敗', (kind === 'in' ? '上班' : '下班') + ' ' + g.text); throw new Error(g.error); }
     var today = fmt_(now), hm = Utilities.formatDate(now, 'Asia/Taipei', 'HH:mm'), msg;
     var lock = LockService.getScriptLock(); lock.waitLock(30000);
@@ -286,7 +286,15 @@ var ACTIONS = {
 
   clockLocations: function (r) {
     auth_(r.token, 'emp');
-    return { ok: true, list: locList_().filter(function (l) { return l.active; }) };
+    return { ok: true, list: locList_().filter(function (l) { return l.active; }).map(function (l) { return { id: l.id, name: l.name, lat: l.lat, lng: l.lng, radius: l.radius, active: true, ipOk: !!l.ips }; }) };
+  },
+
+  /* 人事：取得某地點固定的打卡 QR token（列印張貼用） */
+  adminQrToken: function (r) {
+    auth_(r.token, 'admin');
+    var l = locList_().filter(function (x) { return x.id === String(r.id) && x.active; })[0];
+    if (!l) throw new Error('找不到啟用中的地點');
+    return { ok: true, token: qrToken_(l.id), name: l.name };
   },
 
   adminLocations: function (r) { auth_(r.token, 'admin'); return { ok: true, list: locList_() }; },
@@ -300,8 +308,11 @@ var ACTIONS = {
     var sh = sheet_('打卡地點'), data = sh.getDataRange().getValues(), id = String(r.id || ''), row = -1;
     for (var i = 1; i < data.length; i++) if (id && String(data[i][0]) === id) row = i;
     if (!id) id = 'LOC' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss');
-    var rec = [id, name, lat, lng, radius, r.active === false ? '停用' : '啟用'];
-    if (row >= 0) sh.getRange(row + 1, 1, 1, 6).setValues([rec]); else sh.appendRow(rec);
+    var ips = ipList_(r.ips);
+    ips.forEach(function (x) { if (!/^[0-9a-fA-F:.]+\*?$/.test(x)) throw new Error('IP 格式不正確：' + x); });
+    var rec = [id, name, lat, lng, radius, r.active === false ? '停用' : '啟用', ips.join(', ')];
+    if (sh.getRange(1, 7).getValue() !== '允許IP') sh.getRange(1, 7).setValue('允許IP').setFontWeight('bold');
+    if (row >= 0) sh.getRange(row + 1, 1, 1, 7).setValues([rec]); else sh.appendRow(rec);
     log_(s.id, '儲存打卡地點', name + ' ' + radius + 'm');
     return { ok: true, list: locList_() };
   },
@@ -1009,7 +1020,7 @@ function clockRow_(x) {
 /* 打卡地點（GPS 定點，比照 hr-system） */
 function locList_() {
   return sheet_('打卡地點').getDataRange().getValues().slice(1).filter(function (x) { return x[0]; }).map(function (x) {
-    return { id: String(x[0]), name: String(x[1]), lat: Number(x[2]), lng: Number(x[3]), radius: Number(x[4]), active: String(x[5]) !== '停用' };
+    return { id: String(x[0]), name: String(x[1]), lat: Number(x[2]), lng: Number(x[3]), radius: Number(x[4]), active: String(x[5]) !== '停用', ips: ipList_(x[6]).join(', ') };
   });
 }
 function distance_(lat1, lon1, lat2, lon2) {
@@ -1027,6 +1038,38 @@ function gpsCheck_(la, ln) {
   var dist = Math.round(best.d), text = best.l.name + ' ' + dist + 'm（' + lat.toFixed(6) + ',' + lng.toFixed(6) + '）';
   if (dist > best.l.radius) return { ok: false, error: '距離「' + best.l.name + '」' + dist + ' 公尺，超出打卡範圍（' + best.l.radius + ' 公尺）', text: text + ' 超出範圍' };
   return { ok: true, place: best.l.name, dist: dist, text: text };
+}
+/* IP：由瀏覽器回報（Apps Script 看不到連線來源），只收 IPv4／IPv6 格式；地點的允許 IP 可用 * 結尾表示網段 */
+function cleanIp_(v) { v = String(v || '').trim(); return /^\d{1,3}(\.\d{1,3}){3}$/.test(v) || (/^[0-9a-fA-F:]{2,45}$/.test(v) && v.indexOf(':') >= 0) ? v : ''; }
+function ipList_(v) { return String(v || '').split(/[,，\s]+/).map(function (x) { return x.trim(); }).filter(function (x) { return x; }); }
+function ipMatch_(ip, pat) { return pat.slice(-1) === '*' ? ip.indexOf(pat.slice(0, -1)) === 0 : ip === pat; }
+/* QR：每個地點固定一組簽章 token，可列印張貼 */
+function qrToken_(locId) {
+  var props = PropertiesService.getScriptProperties(), sec = props.getProperty('QR_SECRET');
+  if (!sec) { sec = Utilities.getUuid() + Utilities.getUuid(); props.setProperty('QR_SECRET', sec); }
+  return Utilities.computeHmacSha256Signature('qr:' + locId, sec).slice(0, 8).map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+}
+/* 打卡驗證：QR → GPS 在範圍內 → IP 在公司網路，任一通過即可 */
+function punchCheck_(r) {
+  var locs = locList_().filter(function (l) { return l.active; });
+  if (!locs.length) return { ok: false, error: '尚未設定打卡地點，請洽人事', text: '未設定地點' };
+  var g = gpsCheck_(r.lat, r.lng);
+  if (r.qr && r.qr.loc) {
+    var q = locs.filter(function (l) { return l.id === String(r.qr.loc); })[0];
+    if (!q || qrToken_(q.id) !== String(r.qr.token || '')) return { ok: false, error: 'QR 無效，請掃描現場張貼的正確 QR', text: 'QR 無效' };
+    // 靜態 QR 可能被拍照轉傳：有定位時仍檢查是否在這個地點範圍內
+    var lat = Number(r.lat), lng = Number(r.lng);
+    if (r.lat !== undefined && r.lat !== null && r.lat !== '' && isFinite(lat) && isFinite(lng)) {
+      var d = Math.round(distance_(lat, lng, q.lat, q.lng));
+      if (d > q.radius) return { ok: false, error: '距離「' + q.name + '」' + d + ' 公尺，超出打卡範圍（' + q.radius + ' 公尺）', text: q.name + '（QR）' + d + 'm 超出範圍' };
+      return { ok: true, place: q.name, text: q.name + '（QR）' + d + 'm' };
+    }
+    return { ok: true, place: q.name, text: q.name + '（QR，無定位）' };
+  }
+  if (g.ok) return { ok: true, place: g.place, text: g.text + '（GPS）' };
+  var ip = cleanIp_(r.ip), ipLoc = ip ? locs.filter(function (l) { return ipList_(l.ips).some(function (x) { return ipMatch_(ip, x); }); })[0] : null;
+  if (ipLoc) return { ok: true, place: ipLoc.name, text: ipLoc.name + '（IP ' + ip + '）' };
+  return { ok: false, error: g.error + (ip ? '；目前網路（IP ' + ip + '）也不是公司網路' : '') + '。也可連公司 Wi-Fi 或掃現場 QR 打卡', text: g.text + (ip ? '；IP ' + ip : '') };
 }
 function clockInfo_(emp) {
   var now = new Date(), today = fmt_(now), ym = today.slice(0, 7), prevYm = fmt_(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);
