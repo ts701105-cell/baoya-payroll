@@ -1049,27 +1049,20 @@ function qrToken_(locId) {
   if (!sec) { sec = Utilities.getUuid() + Utilities.getUuid(); props.setProperty('QR_SECRET', sec); }
   return Utilities.computeHmacSha256Signature('qr:' + locId, sec).slice(0, 8).map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
 }
-/* 打卡驗證：QR → GPS 在範圍內 → IP 在公司網路，任一通過即可 */
+/* 打卡驗證：QR、GPS、IP 三項都要通過，且都對到同一個地點 */
 function punchCheck_(r) {
-  var locs = locList_().filter(function (l) { return l.active; });
-  if (!locs.length) return { ok: false, error: '尚未設定打卡地點，請洽人事', text: '未設定地點' };
-  var g = gpsCheck_(r.lat, r.lng);
-  if (r.qr && r.qr.loc) {
-    var q = locs.filter(function (l) { return l.id === String(r.qr.loc); })[0];
-    if (!q || qrToken_(q.id) !== String(r.qr.token || '')) return { ok: false, error: 'QR 無效，請掃描現場張貼的正確 QR', text: 'QR 無效' };
-    // 靜態 QR 可能被拍照轉傳：有定位時仍檢查是否在這個地點範圍內
-    var lat = Number(r.lat), lng = Number(r.lng);
-    if (r.lat !== undefined && r.lat !== null && r.lat !== '' && isFinite(lat) && isFinite(lng)) {
-      var d = Math.round(distance_(lat, lng, q.lat, q.lng));
-      if (d > q.radius) return { ok: false, error: '距離「' + q.name + '」' + d + ' 公尺，超出打卡範圍（' + q.radius + ' 公尺）', text: q.name + '（QR）' + d + 'm 超出範圍' };
-      return { ok: true, place: q.name, text: q.name + '（QR）' + d + 'm' };
-    }
-    return { ok: true, place: q.name, text: q.name + '（QR，無定位）' };
-  }
-  if (g.ok) return { ok: true, place: g.place, text: g.text + '（GPS）' };
-  var ip = cleanIp_(r.ip), ipLoc = ip ? locs.filter(function (l) { return ipList_(l.ips).some(function (x) { return ipMatch_(ip, x); }); })[0] : null;
-  if (ipLoc) return { ok: true, place: ipLoc.name, text: ipLoc.name + '（IP ' + ip + '）' };
-  return { ok: false, error: g.error + (ip ? '；目前網路（IP ' + ip + '）也不是公司網路' : '') + '。也可連公司 Wi-Fi 或掃現場 QR 打卡', text: g.text + (ip ? '；IP ' + ip : '') };
+  if (!r.qr || !r.qr.loc) return { ok: false, error: '請先按「掃 QR 打卡」掃描現場張貼的 QR', text: '未掃 QR' };
+  var q = locList_().filter(function (l) { return l.active && l.id === String(r.qr.loc); })[0];
+  if (!q) return { ok: false, error: 'QR 對應的地點不存在或已停用', text: 'QR 地點無效' };
+  if (qrToken_(q.id) !== String(r.qr.token || '')) return { ok: false, error: 'QR 無效，請掃描現場張貼的正確 QR', text: q.name + ' QR 無效' };
+  var lat = Number(r.lat), lng = Number(r.lng);
+  if (r.lat === undefined || r.lat === null || r.lat === '' || !isFinite(lat) || !isFinite(lng)) return { ok: false, error: '取不到定位，請允許瀏覽器使用位置後再打卡', text: q.name + ' 無定位' };
+  var d = Math.round(distance_(lat, lng, q.lat, q.lng)), pos = d + 'm（' + lat.toFixed(6) + ',' + lng.toFixed(6) + '）';
+  if (d > q.radius) return { ok: false, error: '距離「' + q.name + '」' + d + ' 公尺，超出打卡範圍（' + q.radius + ' 公尺）', text: q.name + ' ' + pos + ' 超出範圍' };
+  var ip = cleanIp_(r.ip), ips = ipList_(q.ips);
+  if (!ips.length) return { ok: false, error: '「' + q.name + '」尚未設定允許 IP，請洽人事', text: q.name + ' 未設定 IP' };
+  if (!ip || !ips.some(function (x) { return ipMatch_(ip, x); })) return { ok: false, error: '目前網路（IP ' + (ip || '未知') + '）不是公司網路，請連公司 Wi-Fi 後再打卡', text: q.name + ' ' + pos + ' IP ' + (ip || '未知') + ' 不符' };
+  return { ok: true, place: q.name, text: q.name + ' ' + pos + ' IP ' + ip + '（QR+GPS+IP）' };
 }
 function clockInfo_(emp) {
   var now = new Date(), today = fmt_(now), ym = today.slice(0, 7), prevYm = fmt_(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);

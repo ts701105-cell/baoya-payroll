@@ -240,13 +240,13 @@
       '<button class="btn" id="pout" style="min-width:130px;padding:14px 18px;font-size:17px" disabled>下班打卡</button></div>' +
       '<div class="row" style="margin-top:8px;justify-content:center;gap:8px"><button class="btn sm" id="ploc">重新定位</button><button class="btn sm" id="pscan">掃 QR 打卡</button></div>' +
       '<div class="muted small" style="margin-top:12px">' + (t ? '今天：上班 ' + (t.in || '—') + '・下班 ' + (t.out || '—') : '') + '</div>' +
-      '<div class="muted small">三種方式任一通過即可打卡：① GPS 在打卡地點範圍內 ② 掃現場張貼的 QR ③ 連公司網路（IP）（可打卡地點：' + ((state.clockLocs || []).map(function (l) { return esc(l.name) + ' ' + l.radius + ' 公尺'; }).join('、') || '尚未設定') + '）。打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
+      '<div class="muted small">打卡要三項都通過：① 掃現場張貼的 QR ② GPS 在打卡地點範圍內 ③ 連公司 Wi-Fi（IP）（可打卡地點：' + ((state.clockLocs || []).map(function (l) { return esc(l.name) + ' ' + l.radius + ' 公尺'; }).join('、') || '尚未設定') + '）。打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
       '<h3 style="margin:18px 0 10px">打卡紀錄（本月與上月）<span class="muted small" style="font-weight:400">　本月合計 ' + d.monthHours + ' 小時</span></h3>' +
       (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>上班</th><th>下班</th><th class="r">時數</th><th>備註</th></tr></thead><tbody>' +
         d.list.map(function (x) { return '<tr><td>' + esc(x.date) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + (x.inGps ? '<br><span class="muted small">' + esc(x.inGps.replace(/（.*）/, '')) + '</span>' : '') + '</td><td>' + (esc(x.out) || '<span class="muted">—</span>') + (x.outGps ? '<br><span class="muted small">' + esc(x.outGps.replace(/（.*）/, '')) + '</span>' : '') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td><td class="small">' + esc(x.note) + '</td></tr>'; }).join('') +
         '</tbody></table></div>' : '<div class="empty">還沒有打卡紀錄。</div>');
     var tick = setInterval(function () { var el = document.getElementById('clk'); if (!el) return clearInterval(tick); var n = new Date(); el.textContent = ('0' + n.getHours()).slice(-2) + ':' + ('0' + n.getMinutes()).slice(-2) + ':' + ('0' + n.getSeconds()).slice(-2); }, 1000);
-    var pos = null, qr = load('pendingQr'), myIp = '', ipAvail = (state.clockLocs || []).some(function (l) { return l.ipOk; });
+    var pos = null, qr = load('pendingQr'), myIp = '', ipAvail = true;
     store('pendingQr', null);
     function locName(id) { var l = (state.clockLocs || []).filter(function (x) { return x.id === id; })[0]; return l ? l.name : '未知地點'; }
     function showQr() {
@@ -254,8 +254,8 @@
       el.innerHTML = qr ? '已掃描 QR：<b>' + esc(locName(qr.loc)) + '</b> <button class="btn sm" id="qrx">取消</button>' : '';
       if (qr) document.getElementById('qrx').onclick = function () { qr = null; showQr(); refreshBtns(); };
     }
-    function refreshBtns() { var can = !!(pos || qr || (ipAvail && myIp)); document.getElementById('pin').disabled = !can || !!(t && t.in); document.getElementById('pout').disabled = !can; }
-    if (ipAvail) getIP().then(function (ip) { myIp = ip; var el = document.getElementById('ipst'); if (el) el.textContent = ip ? '目前網路 IP：' + ip + '（連公司 Wi-Fi 時可用 IP 打卡）' : ''; if (document.getElementById('pin')) refreshBtns(); });
+    function refreshBtns() { var can = !!(pos && qr && myIp); document.getElementById('pin').disabled = !can || !!(t && t.in); document.getElementById('pout').disabled = !can; }
+    if (ipAvail) getIP().then(function (ip) { myIp = ip; var el = document.getElementById('ipst'); if (el) el.textContent = ip ? '目前網路 IP：' + ip + '（需連公司 Wi-Fi）' : '取不到 IP，請確認網路連線'; if (document.getElementById('pin')) refreshBtns(); });
     document.getElementById('pscan').onclick = function () { scanQr(function (q) { qr = q; showQr(); refreshBtns(); }); };
     showQr();
     function locate() {
@@ -268,7 +268,7 @@
         g.innerHTML = near ? '定位精準度約 ' + Math.round(pos.acc) + ' 公尺。距離「' + esc(near.l.name) + '」' + Math.round(near.d) + ' 公尺 — ' +
           (near.d <= near.l.radius ? '<span class="badge green">在範圍內</span>' : '<span class="badge red">超出範圍</span>') : '<span style="color:var(--bad)">尚未設定打卡地點，請洽人事</span>';
         refreshBtns();
-      }).catch(function (e) { g.innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>' + (ipAvail || qr ? '<span class="muted">（仍可用 IP 或 QR 打卡）</span>' : ''); });
+      }).catch(function (e) { g.innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>'; });
     }
     document.getElementById('ploc').onclick = locate;
     locate();
@@ -276,14 +276,11 @@
       var label = kind === 'in' ? '上班' : '下班';
       confirmBox('確定打<b>' + label + '卡</b>？', label + '打卡').then(function (ok) {
         if (!ok) return;
-        var used = qr; qr = null; showQr();   // QR 只用一次
-        // 打卡當下重新定位；取不到定位時改用 QR 或 IP，由後端判斷
-        Promise.all([Promise.race([getPosition().catch(function () { return null; }), new Promise(function (r) { setTimeout(function () { r(null); }, 12000); })]), ipAvail ? getIP() : Promise.resolve('')]).then(function (rs) {
-          var p = rs[0], a = { token: state.emp.token, kind: kind, device: navigator.userAgent, ip: rs[1] };
-          if (used) a.qr = used;
-          if (p) { a.lat = p.coords.latitude; a.lng = p.coords.longitude; }
-          else if (!used && !rs[1]) throw new Error('取不到定位，請允許定位、連公司 Wi-Fi，或掃現場 QR 打卡');
-          return api('punch', a);
+        var used = qr; qr = null; showQr(); refreshBtns();   // QR 只用一次，打卡要重新掃
+        if (!used) return alertMsg('請先按「掃 QR 打卡」掃描現場張貼的 QR');
+        Promise.all([getPosition(), getIP()]).then(function (rs) {   // 打卡當下重新定位
+          if (!rs[1]) throw new Error('取不到目前網路的 IP，請確認已連上公司 Wi-Fi');
+          return api('punch', { token: state.emp.token, kind: kind, device: navigator.userAgent, qr: used, lat: rs[0].coords.latitude, lng: rs[0].coords.longitude, ip: rs[1] });
         }).then(function (j) {
           renderClock(body, j.data);
           modal('<div class="msg ok">' + esc(j.message) + '</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>');
