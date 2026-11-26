@@ -141,57 +141,6 @@
   function empTabs() { var t = [['pay', '薪資・出勤']]; if (canLeave()) t.push(['leave', '請假']); if (state.emp && state.emp.clock) t.push(['clock', '打卡']); if (state.emp && state.emp.overtime) t.push(['ot', '報加班']); return t; }
 
   /* ───────── 上下班打卡 ───────── */
-  /* ── QR／IP 打卡共用 ── */
-  var libP = {};
-  function loadLib(src, name) {
-    if (window[name]) return Promise.resolve(window[name]);
-    if (!libP[src]) libP[src] = new Promise(function (ok, no) { var sc = document.createElement('script'); sc.src = src; sc.onload = function () { ok(window[name]); }; sc.onerror = function () { delete libP[src]; no(new Error('無法載入 QR 元件')); }; document.head.appendChild(sc); });
-    return libP[src];
-  }
-  var ipP = null;
-  function getIP() {
-    if (!ipP) {
-      var t = function (u) { var c = new AbortController(), h = setTimeout(function () { c.abort(); }, 4000); return fetch(u, { signal: c.signal, cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) { clearTimeout(h); return String(j.ip || ''); }); };
-      ipP = t('https://api64.ipify.org?format=json').catch(function () { return t('https://api.ipify.org?format=json'); }).catch(function () { return ''; })
-        .then(function (ip) { return /^[0-9a-fA-F:.]{3,45}$/.test(ip) ? ip : ''; });
-    }
-    return ipP;
-  }
-  function parseQr(text) {
-    text = String(text || ''); var i = text.indexOf('#/qr?'); if (i < 0) return null;
-    var sp = new URLSearchParams(text.slice(i + 5)), l = sp.get('l'), t = sp.get('t');
-    return l && t && l.length <= 40 && /^[0-9a-f]{4,64}$/i.test(t) ? { loc: l, token: t } : null;
-  }
-  // 用手機相機掃 QR 會開啟「網址#/qr?l=…&t=…」：先記下，登入後自動帶到打卡頁
-  (function () { var q = parseQr(location.hash); if (q) { store('pendingQr', q); state.empMode = 'clock'; history.replaceState(null, '', location.pathname + location.search); } })();
-  function scanQr(onFound) {
-    var stream = null, raf = 0, done = false;
-    function stop() { done = true; cancelAnimationFrame(raf); if (stream) stream.getTracks().forEach(function (x) { x.stop(); }); stream = null; }
-    modal('<b>掃描打卡 QR</b><video id="qv" playsinline muted style="width:100%;border-radius:8px;background:#000;margin-top:8px"></video><canvas id="qc" style="display:none"></canvas><div class="muted small" id="qmsg">正在開啟相機…</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>取消</button></div>', function (m, close) {
-      m.querySelector('[data-close]').addEventListener('click', stop);
-      m.parentNode.addEventListener('click', function (e) { if (e.target === m.parentNode) stop(); });
-      var msg = m.querySelector('#qmsg');
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { msg.textContent = '無法開啟相機，請改用手機內建相機掃描 QR。'; return; }
-      loadLib('vendor/jsQR.js', 'jsQR').then(function (jsq) {
-        return navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then(function (st) {
-          stream = st; if (done) return stop();
-          var v = m.querySelector('#qv'); v.srcObject = st; return v.play().then(function () {
-            msg.textContent = '請將鏡頭對準現場張貼的 QR';
-            var cv = m.querySelector('#qc'), cx = cv.getContext('2d', { willReadFrequently: true });
-            (function loop() {
-              if (done) return;
-              if (v.videoWidth) {
-                var k = Math.min(1, 640 / v.videoWidth); cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
-                cx.drawImage(v, 0, 0, cv.width, cv.height); var img = cx.getImageData(0, 0, cv.width, cv.height), code = jsq(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-                if (code && code.data) { var q = parseQr(code.data); if (q) { stop(); close(); onFound(q); return; } msg.textContent = '這不是本系統的打卡 QR，請重試'; }
-              }
-              raf = requestAnimationFrame(loop);
-            })();
-          });
-        });
-      }).catch(function (e) { stop(); msg.textContent = e && e.name === 'NotAllowedError' ? '相機權限被拒絕，請在瀏覽器設定中允許，或改用手機內建相機掃描 QR。' : '無法開啟相機，請改用手機內建相機掃描 QR。'; });
-    });
-  }
   function haversine(a, b, c, d) {
     var R = 6371000, r = Math.PI / 180, dl = (c - a) * r, dn = (d - b) * r;
     var x = Math.sin(dl / 2) * Math.sin(dl / 2) + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dn / 2) * Math.sin(dn / 2);
@@ -233,42 +182,30 @@
     body.innerHTML = '<div class="card" style="text-align:center">' +
       '<div class="muted small">' + esc(d.today) + '</div><div id="clk" style="font-size:44px;font-weight:700;letter-spacing:2px;margin:6px 0">' + esc(d.now) + '</div>' +
       '<div style="margin-bottom:6px">' + status + '</div>' +
-      '<div class="small" id="geo" style="margin-bottom:4px">定位中…</div>' +
-      '<div class="small" id="qrst"></div><div class="small muted" id="ipst" style="margin-bottom:12px"></div>' +
+      '<div class="small" id="geo" style="margin-bottom:12px">定位中…</div>' +
       '<div class="row" style="justify-content:center;gap:14px">' +
       '<button class="btn primary" id="pin" style="min-width:130px;padding:14px 18px;font-size:17px" disabled>上班打卡</button>' +
       '<button class="btn" id="pout" style="min-width:130px;padding:14px 18px;font-size:17px" disabled>下班打卡</button></div>' +
-      '<div class="row" style="margin-top:8px;justify-content:center;gap:8px"><button class="btn sm" id="ploc">重新定位</button><button class="btn sm" id="pscan">掃 QR 打卡</button></div>' +
+      '<div style="margin-top:8px"><button class="btn sm" id="ploc">重新定位</button></div>' +
       '<div class="muted small" style="margin-top:12px">' + (t ? '今天：上班 ' + (t.in || '—') + '・下班 ' + (t.out || '—') : '') + '</div>' +
-      '<div class="muted small">三種方式任一通過即可打卡：① GPS 在打卡地點範圍內 ② 掃現場張貼的 QR ③ 連公司網路（IP）（可打卡地點：' + ((state.clockLocs || []).map(function (l) { return esc(l.name) + ' ' + l.radius + ' 公尺'; }).join('、') || '尚未設定') + '）。打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
+      '<div class="muted small">需在打卡地點範圍內才能打卡（可打卡地點：' + ((state.clockLocs || []).map(function (l) { return esc(l.name) + ' ' + l.radius + ' 公尺'; }).join('、') || '尚未設定') + '）。打卡時間以伺服器時間為準；夜班隔天下班會接到前一天的上班卡。打錯請洽人事修改。</div></div>' +
       '<h3 style="margin:18px 0 10px">打卡紀錄（本月與上月）<span class="muted small" style="font-weight:400">　本月合計 ' + d.monthHours + ' 小時</span></h3>' +
       (d.list.length ? '<div class="tbl-wrap"><table><thead><tr><th>日期</th><th>上班</th><th>下班</th><th class="r">時數</th><th>備註</th></tr></thead><tbody>' +
         d.list.map(function (x) { return '<tr><td>' + esc(x.date) + '</td><td>' + (esc(x.in) || '<span style="color:var(--bad)">未打</span>') + (x.inGps ? '<br><span class="muted small">' + esc(x.inGps.replace(/（.*）/, '')) + '</span>' : '') + '</td><td>' + (esc(x.out) || '<span class="muted">—</span>') + (x.outGps ? '<br><span class="muted small">' + esc(x.outGps.replace(/（.*）/, '')) + '</span>' : '') + '</td><td class="r">' + (x.hours === '' ? '' : x.hours) + '</td><td class="small">' + esc(x.note) + '</td></tr>'; }).join('') +
         '</tbody></table></div>' : '<div class="empty">還沒有打卡紀錄。</div>');
     var tick = setInterval(function () { var el = document.getElementById('clk'); if (!el) return clearInterval(tick); var n = new Date(); el.textContent = ('0' + n.getHours()).slice(-2) + ':' + ('0' + n.getMinutes()).slice(-2) + ':' + ('0' + n.getSeconds()).slice(-2); }, 1000);
-    var pos = null, qr = load('pendingQr'), myIp = '', ipAvail = (state.clockLocs || []).some(function (l) { return l.ipOk; });
-    store('pendingQr', null);
-    function locName(id) { var l = (state.clockLocs || []).filter(function (x) { return x.id === id; })[0]; return l ? l.name : '未知地點'; }
-    function showQr() {
-      var el = document.getElementById('qrst');
-      el.innerHTML = qr ? '已掃描 QR：<b>' + esc(locName(qr.loc)) + '</b> <button class="btn sm" id="qrx">取消</button>' : '';
-      if (qr) document.getElementById('qrx').onclick = function () { qr = null; showQr(); refreshBtns(); };
-    }
-    function refreshBtns() { var can = !!(pos || qr || (ipAvail && myIp)); document.getElementById('pin').disabled = !can || !!(t && t.in); document.getElementById('pout').disabled = !can; }
-    if (ipAvail) getIP().then(function (ip) { myIp = ip; var el = document.getElementById('ipst'); if (el) el.textContent = ip ? '目前網路 IP：' + ip + '（連公司 Wi-Fi 時可用 IP 打卡）' : ''; if (document.getElementById('pin')) refreshBtns(); });
-    document.getElementById('pscan').onclick = function () { scanQr(function (q) { qr = q; showQr(); refreshBtns(); }); };
-    showQr();
+    var pos = null;
+    function refreshBtns() { document.getElementById('pin').disabled = !pos || !!(t && t.in); document.getElementById('pout').disabled = !pos; }
     function locate() {
       var g = document.getElementById('geo'); g.textContent = '定位中…'; pos = null; refreshBtns();
       getPosition().then(function (p) {
-        if (!document.getElementById('geo')) return;
         pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
         var near = null;
         (state.clockLocs || []).forEach(function (l) { var dd = haversine(pos.lat, pos.lng, l.lat, l.lng); if (!near || dd < near.d) near = { d: dd, l: l }; });
         g.innerHTML = near ? '定位精準度約 ' + Math.round(pos.acc) + ' 公尺。距離「' + esc(near.l.name) + '」' + Math.round(near.d) + ' 公尺 — ' +
           (near.d <= near.l.radius ? '<span class="badge green">在範圍內</span>' : '<span class="badge red">超出範圍</span>') : '<span style="color:var(--bad)">尚未設定打卡地點，請洽人事</span>';
         refreshBtns();
-      }).catch(function (e) { g.innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>' + (ipAvail || qr ? '<span class="muted">（仍可用 IP 或 QR 打卡）</span>' : ''); });
+      }).catch(function (e) { g.innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>'; });
     }
     document.getElementById('ploc').onclick = locate;
     locate();
@@ -276,14 +213,8 @@
       var label = kind === 'in' ? '上班' : '下班';
       confirmBox('確定打<b>' + label + '卡</b>？', label + '打卡').then(function (ok) {
         if (!ok) return;
-        var used = qr; qr = null; showQr();   // QR 只用一次
-        // 打卡當下重新定位；取不到定位時改用 QR 或 IP，由後端判斷
-        Promise.all([Promise.race([getPosition().catch(function () { return null; }), new Promise(function (r) { setTimeout(function () { r(null); }, 12000); })]), ipAvail ? getIP() : Promise.resolve('')]).then(function (rs) {
-          var p = rs[0], a = { token: state.emp.token, kind: kind, device: navigator.userAgent, ip: rs[1] };
-          if (used) a.qr = used;
-          if (p) { a.lat = p.coords.latitude; a.lng = p.coords.longitude; }
-          else if (!used && !rs[1]) throw new Error('取不到定位，請允許定位、連公司 Wi-Fi，或掃現場 QR 打卡');
-          return api('punch', a);
+        getPosition().then(function (p) {   // 打卡當下重新定位
+          return api('punch', { token: state.emp.token, kind: kind, device: navigator.userAgent, lat: p.coords.latitude, lng: p.coords.longitude });
         }).then(function (j) {
           renderClock(body, j.data);
           modal('<div class="msg ok">' + esc(j.message) + '</div><div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>');
@@ -930,16 +861,15 @@
     api('adminLocations', { token: state.admin.token }).then(function (j) { drawLocs(j.list); }).catch(function (e) { body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
     function drawLocs(list) {
       body.innerHTML = '<div class="row" style="margin-bottom:12px"><button class="btn" id="lback">← 回打卡紀錄</button><b>打卡地點（GPS 定點）</b><button class="btn primary" id="ladd">新增地點</button></div>' +
-        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>名稱</th><th>緯度</th><th>經度</th><th class="r">半徑（公尺）</th><th>允許 IP</th><th>狀態</th><th></th></tr></thead><tbody>' +
+        (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>名稱</th><th>緯度</th><th>經度</th><th class="r">半徑（公尺）</th><th>狀態</th><th></th></tr></thead><tbody>' +
           list.map(function (l, i) {
-            return '<tr><td>' + esc(l.name) + '<br><a class="small" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + encodeURIComponent(l.lat + ',' + l.lng) + '">地圖</a></td><td>' + l.lat + '</td><td>' + l.lng + '</td><td class="r">' + l.radius + '</td><td class="small muted">' + (esc(l.ips) || '—') + '</td><td>' + (l.active ? '<span class="badge green">啟用</span>' : '<span class="badge">停用</span>') + '</td>' +
-              '<td class="row" style="flex-wrap:nowrap">' + (l.active ? '<button class="btn sm" data-lq="' + i + '">顯示 QR</button>' : '') + '<button class="btn sm" data-le="' + i + '">編輯</button><button class="btn sm danger" data-ld="' + i + '">刪除</button></td></tr>';
+            return '<tr><td>' + esc(l.name) + '<br><a class="small" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + encodeURIComponent(l.lat + ',' + l.lng) + '">地圖</a></td><td>' + l.lat + '</td><td>' + l.lng + '</td><td class="r">' + l.radius + '</td><td>' + (l.active ? '<span class="badge green">啟用</span>' : '<span class="badge">停用</span>') + '</td>' +
+              '<td class="row" style="flex-wrap:nowrap"><button class="btn sm" data-le="' + i + '">編輯</button><button class="btn sm danger" data-ld="' + i + '">刪除</button></td></tr>';
           }).join('') + '</tbody></table></div>' : '<div class="empty">尚未設定打卡地點。沒有地點時員工無法打卡。</div>') +
         '<div class="muted small" style="margin-top:8px">新增時輸入名稱或地址按「搜尋座標」自動帶入；也可在現場按「使用目前位置」。儲存前請用地圖連結確認位置。員工必須在半徑範圍內才能打卡。</div>';
       document.getElementById('lback').onclick = function () { adminClocks(body); };
       document.getElementById('ladd').onclick = function () { form(null); };
       body.querySelectorAll('[data-le]').forEach(function (b) { b.onclick = function () { form(list[+b.dataset.le]); }; });
-      body.querySelectorAll('[data-lq]').forEach(function (b) { b.onclick = function () { showLocQr(list[+b.dataset.lq]); }; });
       body.querySelectorAll('[data-ld]').forEach(function (b) {
         b.onclick = function () {
           var l = list[+b.dataset.ld];
@@ -947,24 +877,6 @@
             if (ok) api('adminDeleteLocation', { token: state.admin.token, id: l.id }).then(function (j) { drawLocs(j.list); }).catch(function (e) { alertMsg(e.message); });
           });
         };
-      });
-    }
-    function showLocQr(l) {
-      modal('<b>' + esc(l.name) + ' 打卡 QR</b><div id="qrbox" style="max-width:300px;margin:10px auto;min-height:200px"></div><div class="muted small" id="qrmsg">產生中…</div>' +
-        '<div class="muted small">固定不變的 QR，列印後張貼在打卡地點。有人拍照轉傳別人也能掃，所以有定位時系統仍會檢查是否在範圍內。</div>' +
-        '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>關閉</button><button class="btn primary" id="qrprint" disabled>列印</button></div>', function (m) {
-        Promise.all([api('adminQrToken', { token: state.admin.token, id: l.id }), loadLib('vendor/qrcode.js', 'qrcode')]).then(function (rs) {
-          var url = location.origin + location.pathname + '#/qr?l=' + encodeURIComponent(l.id) + '&t=' + rs[0].token;
-          var g = rs[1](0, 'M'); g.addData(url); g.make();
-          var svg = g.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
-          m.querySelector('#qrbox').innerHTML = svg; m.querySelector('#qrmsg').textContent = '用手機相機掃描即可開啟打卡頁。';
-          var pb = m.querySelector('#qrprint'); pb.disabled = false;
-          pb.onclick = function () {
-            var w = window.open('', '_blank'); if (!w) return alertMsg('瀏覽器擋住了列印視窗，請允許彈出視窗');
-            w.document.write('<!doctype html><meta charset="utf-8"><title>' + esc(l.name) + ' 打卡 QR</title><body style="font-family:sans-serif;text-align:center;margin:40px"><h1>' + esc(l.name) + '</h1><div style="width:360px;margin:0 auto">' + svg + '</div><h2>掃描 QR 打卡</h2><p>用手機相機掃描，登入後按上班或下班</p></body>');
-            w.document.close(); w.focus(); w.print();
-          };
-        }).catch(function (e) { m.querySelector('#qrmsg').textContent = e.message; });
       });
     }
     function form(l) {
@@ -975,7 +887,6 @@
         '<div id="l_res" class="small"></div>' +
         '<div class="row"><label class="field" style="flex:1"><span>緯度</span><input id="l_lat" type="number" step="any" value="' + esc(l.lat) + '"></label><label class="field" style="flex:1"><span>經度</span><input id="l_lng" type="number" step="any" value="' + esc(l.lng) + '"></label></div>' +
         '<div id="l_chk" class="small muted"></div>' +
-        '<label class="field"><span>允許 IP（選填：連這個網路就能打卡，多個用逗號分隔；結尾 * 代表整個網段，例如 61.220.10.*）</span><div class="row"><input id="l_ips" style="flex:1" value="' + esc(l.ips || '') + '"><button class="btn" id="l_myip">加入目前 IP</button></div></label>' +
         '<div class="row"><label class="field" style="flex:1"><span>允許半徑（公尺）</span><input id="l_rad" type="number" min="10" max="5000" value="' + esc(l.radius) + '"></label>' +
         '<label class="field" style="flex:1"><span>狀態</span><select id="l_act"><option value="1"' + (l.active ? ' selected' : '') + '>啟用</option><option value="0"' + (!l.active ? ' selected' : '') + '>停用</option></select></label></div>' +
         '<div class="row" style="justify-content:space-between"><button class="btn" id="l_here">使用目前位置</button><span><button class="btn" data-close>取消</button> <button class="btn primary" id="l_ok">儲存</button></span></div>', function (m, close) {
@@ -993,12 +904,9 @@
             q('l_res').querySelectorAll('[data-pk]').forEach(function (b) { b.onclick = function () { pick(list[+b.dataset.pk]); }; });
           }).catch(function (e) { q('l_res').innerHTML = '<span style="color:var(--bad)">' + esc(e.message) + '</span>'; });
         };
-        q('l_myip').onclick = function () {
-          getIP().then(function (ip) { if (!ip) return alertMsg('取不到目前的 IP'); var cur = q('l_ips').value.split(/[,，\s]+/).filter(Boolean); if (cur.indexOf(ip) < 0) cur.push(ip); q('l_ips').value = cur.join(', '); });
-        };
         q('l_here').onclick = function () { getPosition().then(function (p) { pick({ lat: p.coords.latitude, lng: p.coords.longitude }); }).catch(function (e) { alertMsg(e.message); }); };
         q('l_ok').onclick = function () {
-          api('adminSaveLocation', { token: state.admin.token, id: l.id, name: q('l_name').value, lat: q('l_lat').value, lng: q('l_lng').value, radius: q('l_rad').value, active: q('l_act').value === '1', ips: q('l_ips').value })
+          api('adminSaveLocation', { token: state.admin.token, id: l.id, name: q('l_name').value, lat: q('l_lat').value, lng: q('l_lng').value, radius: q('l_rad').value, active: q('l_act').value === '1' })
             .then(function (j) { close(); drawLocs(j.list); }).catch(function (e) { alertMsg(e.message); });
         };
       });
