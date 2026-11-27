@@ -56,7 +56,7 @@ var SHEETS = {
   特休: ['期間代碼', '東慧員編', '到職日', '年資', '累計已休', '剩餘特休'],
   管理員: ['帳號', '姓名', '密碼雜湊', '鹽', '需改密碼', '狀態'],
   紀錄: ['時間', '帳號', '動作', '說明'],
-  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄'],
+  請假: ['申請編號', '東慧員編', '姓名', '假別', '開始日', '結束日', '每日時數', '總時數', '事由', '狀態', '申請時間', '審核者', '審核時間', '審核備註', '系統提醒', '開始時間', '結束時間', '證明檔ID', '證明檔名', '修改紀錄', '調休'],
   請假調整: ['東慧員編', '假別', '適用起日', '已休時數', '說明'],
   打卡: ['東慧員編', '姓名', '日期', '上班', '下班', '工時', '上班裝置', '下班裝置', '備註', '修改紀錄', '上班定位', '下班定位'],
   打卡地點: ['地點ID', '名稱', '緯度', '經度', '半徑(公尺)', '啟用'],
@@ -346,7 +346,7 @@ var ACTIONS = {
       dateRange_(a.start, a.end).forEach(function (d) {
         var k = a.empNo + '|' + d + '|' + a.type;
         if (!ok(a.empNo, d, a.type) || rec[k]) return;
-        rec[k] = { hours: a.perDay, src: '線上申請（' + a.status + '）', note: (a.startTime === '整天' ? '整天' : a.startTime ? a.startTime + '–' + a.endTime : '') + (a.reason ? '　' + a.reason : '') };
+        rec[k] = { hours: a.perDay, src: '線上申請（' + a.status + '）', note: (a.startTime === '整天' ? '整天' : a.startTime ? a.startTime + '–' + a.endTime : '') + (a.swap === '是' ? '　調休' : '') + (a.reason ? '　' + a.reason : '') };
       });
     });
     var list = Object.keys(rec).map(function (k) {
@@ -846,7 +846,7 @@ function leaveEmp_(empNo, adminView) {
 function leaveRow_(x) {
   return { id: String(x[0]), empNo: String(x[1]), name: x[2], type: x[3], start: normDate_(x[4]), end: normDate_(x[5]), perDay: +x[6], hours: +x[7], reason: x[8],
     status: x[9], appliedAt: ts_(x[10]), reviewer: x[11], reviewedAt: ts_(x[12]), note: x[13], warning: x[14] || '',
-    startTime: String(x[15]) === '整天' ? '整天' : tm_(x[15]), endTime: tm_(x[16]), proofId: String(x[17] || ''), proofName: String(x[18] || ''), edits: String(x[19] || '') };
+    startTime: String(x[15]) === '整天' ? '整天' : tm_(x[15]), endTime: tm_(x[16]), proofId: String(x[17] || ''), proofName: String(x[18] || ''), edits: String(x[19] || ''), swap: String(x[20] || '否') };
 }
 
 /* 彙整：已休 = 出勤明細的請假（優先）＋「請假調整」的逐日紀錄（同日同假別不重複）＋ 已核准、尚未出現在出勤紀錄的申請 */
@@ -1167,10 +1167,12 @@ function saveLeave_(emp, r, editId, actor, byAdmin) {
       var d0 = row.data, before = d0[3] + ' ' + normDate_(d0[4]) + (normDate_(d0[5]) !== normDate_(d0[4]) ? '～' + normDate_(d0[5]) : '') + ' ' + timeLabel_(d0[15], d0[16]) + ' ' + d0[7] + 'h';
       var hist = (d0[19] ? d0[19] + '\n' : '') + now_() + ' ' + actor + ' 修改（原：' + before + '）';
       row.sh.getRange(row.i + 1, 4, 1, 6).setValues([[type, start, end, perDay, total, reason]]);
-      row.sh.getRange(row.i + 1, 15, 1, 6).setValues([[warn, st, en, pf.id, pf.name, hist]]);
+      var swap = r.swap === '是' || r.swap === '否' ? r.swap : String(d0[20] || '否');
+      if (swap !== String(d0[20] || '否')) hist += '（調休：' + String(d0[20] || '否') + '→' + swap + '）';
+      row.sh.getRange(row.i + 1, 15, 1, 7).setValues([[warn, st, en, pf.id, pf.name, hist, swap]]);
     } else {
       var id = 'L' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
-      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn, st, en, pf.id, pf.name, '']);
+      sheet_('請假').appendRow([id, emp.empNo, emp.name, type, start, end, perDay, total, reason, '審核中', now_(), '', '', '', warn, st, en, pf.id, pf.name, '', r.swap === '是' ? '是' : '否']);
     }
   } finally { lock.releaseLock(); }
   return { warn: warn, summary: type + ' ' + start + (end !== start ? '～' + end : '') + ' ' + timeLabel_(st, en) + ' ' + total + 'h' };

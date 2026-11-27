@@ -349,8 +349,8 @@
   function renderLeave(body, d, editing) {
     var today = d.today.replace(/\//g, '-'), ed = editing || null;
     var v = ed ? { type: ed.type, start: ed.start.replace(/\//g, '-'), end: ed.end.replace(/\//g, '-'), mode: ed.startTime && ed.startTime !== '整天' ? 'hour' : 'day',
-                   st: ed.startTime && ed.startTime !== '整天' ? ed.startTime : '08:00', en: ed.endTime || '12:00', reason: ed.reason || '' }
-               : { type: d.types[0], start: today, end: today, mode: 'day', st: '08:00', en: '12:00', reason: '' };
+                   st: ed.startTime && ed.startTime !== '整天' ? ed.startTime : '08:00', en: ed.endTime || '12:00', reason: ed.reason || '', swap: ed.swap || '否' }
+               : { type: d.types[0], start: today, end: today, mode: 'day', st: '08:00', en: '12:00', reason: '', swap: '否' };
     body.innerHTML = '<h3 style="margin:4px 0 10px">我的假別額度</h3>' + balancesHtml(d) +
       '<form class="card" id="lvf"><h2>' + (ed ? '修改請假申請' : '申請請假') + '</h2><div class="row">' +
       '<label class="field" style="margin:0;flex:1"><span>假別</span><select name="type">' + d.types.map(function (t) { var r = leaveRemain(d, t, ed); return '<option value="' + esc(t) + '"' + (t === v.type ? ' selected' : '') + '>' + esc(t) + (r.left != null ? '（剩 ' + Math.max(0, r.left) + ' 小時）' : '') + '</option>'; }).join('') + '</select><div id="lvrem" class="small" style="margin-top:4px"></div></label>' +
@@ -361,13 +361,14 @@
       '<label class="field lvtime" style="margin:0;width:130px"><span>每日開始時間</span>' + timeSelect('st', v.st) + '</label>' +
       '<label class="field lvtime" style="margin:0;width:130px"><span>每日結束時間</span>' + timeSelect('en', v.en) + '</label>' +
       '<div id="lvhrs" class="muted small" style="align-self:flex-end;padding-bottom:10px"></div></div>' +
+      '<label class="field" style="margin-top:12px;width:150px"><span>是否為調休</span><select name="swap"><option' + (v.swap !== '是' ? ' selected' : '') + '>否</option><option' + (v.swap === '是' ? ' selected' : '') + '>是</option></select></label>' +
       '<label class="field" id="lvreason"><span>事由</span><textarea name="reason" rows="2">' + esc(v.reason) + '</textarea></label>' +
       '<label class="field" id="lvproof"><span>證明照片' + (ed && ed.proofName ? '　<span class="muted">已上傳：' + esc(ed.proofName) + '，要更換再選檔</span>' : '') + '</span><input type="file" name="proof" accept="image/jpeg,image/*"><div class="muted small">可直接拍照或選手機裡的照片，系統會存成 JPG</div></label>' +
       '<div id="lvmsg"></div><div class="row" style="justify-content:flex-end">' + (ed ? '<button type="button" class="btn" id="lvcancel">取消修改</button>' : '') + '<button class="btn primary">' + (ed ? '儲存修改' : '送出申請') + '</button></div></form>' +
       '<h3 style="margin:18px 0 10px">我的申請紀錄</h3>' +
       (d.applications.length ? '<div class="tbl-wrap"><table><thead><tr><th>申請時間</th><th>假別</th><th>日期</th><th>時間</th><th class="r">時數</th><th>事由／證明</th><th>狀態</th><th></th></tr></thead><tbody>' +
         d.applications.map(function (a) {
-          return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td>' + esc(a.type) + '</td><td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '</td><td class="small">' + tl(a) + '</td><td class="r">' + a.hours + '</td>' +
+          return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td>' + esc(a.type) + (a.swap === '是' ? '<br><span class="badge orange">調休</span>' : '') + '</td><td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '</td><td class="small">' + tl(a) + '</td><td class="r">' + a.hours + '</td>' +
             '<td class="small">' + esc(a.reason) + (a.proofName ? '<br><span class="muted">📎 ' + esc(a.proofName) + '</span>' : '') + (a.note ? '<br><span class="muted">人事：' + esc(a.note) + '</span>' : '') + '</td>' +
             '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.reviewedAt ? '<br><span class="muted small">審核 ' + esc(a.reviewedAt) + '</span>' : '') + editLog(a) + '</td><td class="row" style="flex-wrap:nowrap">' + (a.status === '審核中' ? '<button class="btn sm" data-edit="' + esc(a.id) + '">修改</button><button class="btn sm" data-cancel="' + esc(a.id) + '">取消</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="empty">還沒有申請紀錄。</div>');
@@ -399,7 +400,7 @@
       confirmBox((ed ? '修改為 ' : '申請 ') + '<b>' + esc(t) + '</b>：' + esc(f.start.value) + (f.end.value !== f.start.value ? '～' + esc(f.end.value) : '') + ' ' + (whole ? '整天' : f.st.value + '–' + f.en.value) + '，合計 <b>' + (h * days()) + ' 小時</b>？', ed ? '儲存' : '送出').then(function (ok) {
         if (!ok) return;
         readProof(d.proofRequired.indexOf(t) >= 0 ? file : null).then(function (proof) {
-          return api(ed ? 'updateLeave' : 'applyLeave', { token: state.emp.token, id: ed ? ed.id : undefined, type: t, mode: whole ? 'day' : 'hour', start: f.start.value, end: f.end.value, startTime: f.st.value, endTime: f.en.value, reason: f.reason.value, proof: proof });
+          return api(ed ? 'updateLeave' : 'applyLeave', { token: state.emp.token, id: ed ? ed.id : undefined, type: t, mode: whole ? 'day' : 'hour', start: f.start.value, end: f.end.value, startTime: f.st.value, endTime: f.en.value, reason: f.reason.value, swap: f.swap.value, proof: proof });
         }).then(function (j) { renderLeave(body, j.data); modal('<div class="msg ok">' + (ed ? '已修改，' : '已送出，') + '等候人事審核。</div>' + (j.warning ? '<div class="msg warn">' + esc(j.warning) + '</div>' : '') + '<div class="row" style="justify-content:flex-end"><button class="btn" data-close>好</button></div>'); })
           .catch(function (err) { msg.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; });
       });
@@ -739,7 +740,7 @@
         '<span class="muted small">點姓名可看該員工的假別額度。額度依「特休週年制、其他假別曆年制」計算；系統上線前已請的假，可在試算表「請假調整」分頁補登。</span></div>' +
         (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>申請時間</th><th>姓名</th><th>假別</th><th>日期／時間</th><th class="r">時數</th><th>事由／證明</th><th>狀態</th><th></th></tr></thead><tbody>' +
           list.map(function (a, i) {
-            return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td><a href="#" data-who="' + esc(a.empNo) + '">' + esc(a.name) + '</a><br><span class="muted small">' + esc(a.empNo) + '</span></td><td>' + esc(a.type) + '</td>' +
+            return '<tr><td class="small">' + esc(a.appliedAt) + '</td><td><a href="#" data-who="' + esc(a.empNo) + '">' + esc(a.name) + '</a><br><span class="muted small">' + esc(a.empNo) + '</span></td><td>' + esc(a.type) + '<br><span class="' + (a.swap === '是' ? 'badge orange' : 'muted small') + '">調休：' + esc(a.swap || '否') + '</span></td>' +
               '<td class="small">' + esc(a.start) + (a.end !== a.start ? '～' + esc(a.end) : '') + '<br><span class="muted">' + (a.startTime ? tl(a) + '，' : '') + '每日 ' + a.perDay + 'h</span></td><td class="r">' + a.hours + '</td>' +
               '<td class="small">' + esc(a.reason) + (a.proofId ? '<br><a href="https://drive.google.com/file/d/' + encodeURIComponent(a.proofId) + '/view" target="_blank" rel="noopener">📎 查看證明</a>' : (a.type === '病假' ? '<br><span style="color:var(--bad)">未附證明</span>' : '')) + (a.note ? '<br><span class="muted">備註：' + esc(a.note) + '</span>' : '') + editLog(a) + '</td>' +
               '<td><span class="badge ' + (ST[a.status] || '') + '">' + esc(a.status) + '</span>' + (a.warning ? '<br><span class="badge red" title="' + esc(a.warning) + '">⚠ 超過額度</span><div class="small" style="color:var(--bad);max-width:220px">' + esc(a.warning) + '</div>' : '') + (a.reviewer ? '<br><span class="muted small">' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</td>' +
@@ -757,11 +758,12 @@
             '<label class="field" style="margin:0;width:170px"><span>請假方式</span><select id="mmode"><option value="day"' + (a.startTime === '整天' || !a.startTime ? ' selected' : '') + '>整天（1 天 ' + a.workday + ' 小時）</option><option value="hour"' + (a.startTime && a.startTime !== '整天' ? ' selected' : '') + '>按時數</option></select></label>' +
             '<label class="field mt" style="margin:0;width:130px"><span>每日開始</span>' + timeSelect('mst', a.startTime && a.startTime !== '整天' ? a.startTime : '08:00').replace('name="mst"', 'id="mst"') + '</label>' +
             '<label class="field mt" style="margin:0;width:130px"><span>每日結束</span>' + timeSelect('men', a.endTime || '12:00').replace('name="men"', 'id="men"') + '</label><div id="mh" class="muted small" style="align-self:flex-end;padding-bottom:10px"></div></div>' +
+            '<label class="field" style="margin-top:10px;width:150px"><span>是否為調休</span><select id="mswap"><option' + (a.swap !== '是' ? ' selected' : '') + '>否</option><option' + (a.swap === '是' ? ' selected' : '') + '>是</option></select></label>' +
             '<div id="mmsg"></div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" data-close>取消</button><button class="btn primary" id="mok">儲存修改</button></div>', function (m, close) {
             function upd() { var whole = m.querySelector('#mmode').value === 'day'; m.querySelectorAll('.mt').forEach(function (x) { x.style.display = whole ? 'none' : ''; }); var h = whole ? a.workday : calcLeaveHours(m.querySelector('#mst').value, m.querySelector('#men').value, j.breaks); m.querySelector('#mh').textContent = '每日 ' + h + ' 小時'; }
             m.addEventListener('change', upd); upd();
             m.querySelector('#mok').onclick = function () {
-              api('adminUpdateLeave', { token: state.admin.token, id: a.id, type: m.querySelector('#mt').value, mode: m.querySelector('#mmode').value, start: m.querySelector('#ms').value, end: m.querySelector('#me').value, startTime: m.querySelector('#mst').value, endTime: m.querySelector('#men').value, reason: a.reason })
+              api('adminUpdateLeave', { token: state.admin.token, id: a.id, type: m.querySelector('#mt').value, mode: m.querySelector('#mmode').value, start: m.querySelector('#ms').value, end: m.querySelector('#me').value, startTime: m.querySelector('#mst').value, endTime: m.querySelector('#men').value, reason: a.reason, swap: m.querySelector('#mswap').value })
                 .then(function (r) { close(); if (r.warning) alertMsg('已修改。提醒：' + r.warning); adminLeaves(body); })
                 .catch(function (e) { m.querySelector('#mmsg').innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
             };
